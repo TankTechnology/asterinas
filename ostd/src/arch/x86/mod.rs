@@ -194,7 +194,9 @@ pub(crate) fn enable_cpu_features() {
         | Cr4Flags::OSXSAVE
         | Cr4Flags::OSFXSR
         | Cr4Flags::OSXMMEXCPT_ENABLE
-        | Cr4Flags::PAGE_GLOBAL;
+        | Cr4Flags::PAGE_GLOBAL
+        | Cr4Flags::PCID  // Process-context identifiers
+        ;
     unsafe {
         x86_64::registers::control::Cr4::write(cr4);
     }

@@ -91,6 +91,24 @@ pub(crate) fn tlb_flush_addr_range(range: &Range<Vaddr>) {
     }
 }
 
+pub(crate) fn tlb_flush_pcid(pcid: u16) {
+    use core::arch::asm;
+    assert!(pcid < 4096);
+    #[repr(C, align(16))]
+    struct Descriptor([u64; 2]);
+    let descriptor =  Descriptor([
+        0,
+        pcid as u64
+    ]);
+    unsafe {
+        asm!(
+            "invpcid {type_reg}, [{}]",
+            in(reg) &descriptor.0 as *const u64,
+            type_reg = in(reg) 1u64, // type 1: single PCID invalidation
+        );
+    }
+}
+
 /// Flush all TLB entries except for the global-page entries.
 pub(crate) fn tlb_flush_all_excluding_global() {
     tlb::flush_all();

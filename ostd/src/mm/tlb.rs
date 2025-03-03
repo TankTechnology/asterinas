@@ -3,7 +3,10 @@
 //! TLB flush operations.
 
 use alloc::vec::Vec;
+use x86::controlregs::Cr4;
+use x86_64::registers::control::Cr4Flags;
 use core::ops::Range;
+use core::sync::atomic::{AtomicU16, Ordering};
 
 use super::{
     frame::{meta::AnyFrameMeta, Frame},
@@ -116,6 +119,63 @@ impl<G: PinCurrentCpu> TlbFlusher<G> {
     }
 }
 
+const MAX_PCID: u16 = 4095;
+
+pub struct  PcidManager {
+    next_pcid: AtomicU16,
+    enabled: bool,
+}
+
+impl PcidManager {
+    pub const fn new() -> Self {
+        Self {
+            next_pcid: AtomicU16::new(1),
+            enabled: false,
+        }
+    }
+    //     let mut cr4 = x86_64::registers::control::Cr4::read();
+    pub fn init(&mut self) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let cr4 = x86_64::registers::control::Cr4::read();
+            // 检查PCID是否为1
+            if cr4 & Cr4Flags::PCID == Cr4Flags::PCID {
+                self.enabled = true;
+            }
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            self.enabled = false;
+        }
+    }
+
+    pub fn allocate(&self) -> Option<u16> {
+        if !self.enabled {
+            return None;
+        }
+        let mut current = self.next_pcid.load(Ordering::Relaxed);
+        loop {
+            let new = current + 1;
+            if new > MAX_PCID {
+                /// PCID is exhausted, and currently we don't support PCID recycling.
+                panic!("PCID is exhausted, and currently we don't support PCID recycling.");
+                return None;
+            }
+            if self.next_pcid.compare_exchange_weak(current, new, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+                return Some(current);
+            }
+            current = self.next_pcid.load(Ordering::Relaxed);
+        }
+    }
+
+    pub fn release_pcid(&self, pcid: u16) {
+        panic!("PCID release is not supported yet.");
+    }
+}
+
+pub static PCID_MANAGER: SpinLock<PcidManager, LocalIrqDisabled> =
+    SpinLock::new(PcidManager::new());
+
 /// The operation to flush TLB entries.
 #[derive(Debug, Clone)]
 pub enum TlbFlushOp {
@@ -125,18 +185,22 @@ pub enum TlbFlushOp {
     Address(Vaddr),
     /// Flush the TLB entries for the specified virtual address range.
     Range(Range<Vaddr>),
+    /// Flush the TBL entries for the PCID.
+    Pcid(u16),
 }
 
 impl TlbFlushOp {
     /// Performs the TLB flush operation on the current CPU.
     pub fn perform_on_current(&self) {
         use crate::arch::mm::{
-            tlb_flush_addr, tlb_flush_addr_range, tlb_flush_all_excluding_global,
+            tlb_flush_addr, tlb_flush_addr_range, tlb_flush_all_excluding_global, tlb_flush_pcid
         };
         match self {
             TlbFlushOp::All => tlb_flush_all_excluding_global(),
             TlbFlushOp::Address(addr) => tlb_flush_addr(*addr),
             TlbFlushOp::Range(range) => tlb_flush_addr_range(range),
+            TlbFlushOp::Pcid(pcid) => tlb_flush_pcid(*pcid)
+            ,
         }
     }
 
@@ -223,3 +287,4 @@ impl OpsStack {
         self.size = 0;
     }
 }
+
