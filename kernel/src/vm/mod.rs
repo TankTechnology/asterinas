@@ -5,7 +5,7 @@
 //! There are two primary VM abstractions:
 //!  * Virtual Memory Address Regions (VMARs) a type of capability that manages
 //!    user address spaces.
-//!  * Virtual Memory Objects (VMOs) are are a type of capability that
+//!  * Virtual Memory Objects (VMOs) are a type of capability that
 //!    represents a set of memory pages.
 //!
 //! The concepts of VMARs and VMOs are originally introduced by
@@ -24,6 +24,7 @@ pub mod perms;
 pub mod util;
 pub mod vmar;
 pub mod vmo;
+pub mod vm_space_pcid;
 
 #[ostd::global_frame_allocator]
 static FRAME_ALLOCATOR: FrameAllocator = FrameAllocator;

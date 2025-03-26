@@ -96,7 +96,11 @@ pub fn init() {
     driver::init();
     time::init();
     #[cfg(target_arch = "x86_64")]
-    net::init();
+    {
+        net::init();
+        // Initialize PCID if running on x86_64
+        arch::x86::mm::pcid::init();
+    }
     sched::init();
     fs::rootfs::init(boot_info().initramfs.expect("No initramfs found!")).unwrap();
     device::init().unwrap();

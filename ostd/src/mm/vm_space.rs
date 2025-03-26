@@ -156,6 +156,10 @@ impl VmSpace {
             last.cpus.remove(cpu, Ordering::Relaxed);
         }
 
+        // Activate the page table
+        // NOTE: PCID integration would be done here in kernel code
+        // by calling the VmSpacePcidExt::activate_with_pcid instead
+        // and setting CR3 with the appropriate PCID.
         self.pt.activate();
     }
 
