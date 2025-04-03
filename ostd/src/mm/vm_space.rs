@@ -14,10 +14,12 @@ use core::{ops::Range, sync::atomic::Ordering};
 use crate::{
     arch::mm::{
         current_page_table_paddr, tlb_flush_all_excluding_global, PageTableEntry, PagingConsts,
+        invpcid_all_excluding_global,
     },
-    cpu::{AtomicCpuSet, CpuExceptionInfo, CpuSet, PinCurrentCpu},
+cpu::{AtomicCpuSet, CpuExceptionInfo, CpuSet, PinCurrentCpu},
     cpu_local_cell,
     mm::{
+        asid_allocation::{self, ASID_FLUSH_REQUIRED},
         io::Fallible,
         kspace::KERNEL_PAGE_TABLE,
         page_table::{self, PageTable, PageTableItem, UserMode},
@@ -53,6 +55,9 @@ pub struct VmSpace {
     /// Cursors hold read locks and activation require a write lock.
     activation_lock: RwLock<()>,
     cpus: AtomicCpuSet,
+    /// ASID
+    asid: u16,
+    asid_generation: u16,
 }
 
 impl VmSpace {
@@ -63,7 +68,19 @@ impl VmSpace {
             page_fault_handler: None,
             activation_lock: RwLock::new(()),
             cpus: AtomicCpuSet::new(CpuSet::new_empty()),
+            asid: asid_allocation::allocate(),
+            asid_generation: asid_allocation::current_generation(),
         }
+    }
+
+    /// Returns the ASID of this VM space.
+    pub fn asid(&self) -> u16 {
+        self.asid
+    }
+
+    /// Returns the ASID generation of this VM space.
+    pub fn asid_generation(&self) -> u16 {
+        self.asid_generation
     }
 
     /// Clears the user space mappings in the page table.
@@ -144,6 +161,15 @@ impl VmSpace {
         // we add the CPU to the CPU set.
         let _activation_lock = self.activation_lock.write();
 
+        let current_generation = asid_allocation::current_generation();
+        let need_flush = self.asid == ASID_FLUSH_REQUIRED || self.asid_generation != current_generation;
+
+        if need_flush {
+            unsafe {
+                invpcid_all_excluding_global();
+            }
+        }
+
         // Record ourselves in the CPU set and the activated VM space pointer.
         self.cpus.add(cpu, Ordering::Relaxed);
         let self_ptr = Arc::into_raw(Arc::clone(self)) as *mut VmSpace;
@@ -156,7 +182,7 @@ impl VmSpace {
             last.cpus.remove(cpu, Ordering::Relaxed);
         }
 
-        self.pt.activate();
+        // self.pt.activate_with_asid(self.asid);
     }
 
     pub(crate) fn handle_page_fault(
@@ -217,6 +243,16 @@ impl VmSpace {
         //
         // SAFETY: The memory range is in user space, as checked above.
         Ok(unsafe { VmWriter::<Fallible>::from_user_space(vaddr as *mut u8, len) })
+    }
+}
+
+impl Drop for VmSpace {
+    fn drop(&mut self) {
+        // Ensure the VmSpace is not activated on any CPU
+        let cpus = self.cpus.load();
+        assert!(cpus.is_empty(), "attempt to drop an activated VmSpace");
+
+        asid_allocation::deallocate(self.asid);
     }
 }
 

@@ -193,6 +193,19 @@ pub(crate) fn enable_cpu_features() {
         | Cr4Flags::OSFXSR
         | Cr4Flags::OSXMMEXCPT_ENABLE
         | Cr4Flags::PAGE_GLOBAL;
+    
+    // Check if PCID is supported by the CPU
+    let ecx = unsafe { core::arch::x86_64::__cpuid(1).ecx };
+    // PCID supported by ECX bit 17
+    let pcid_supported = (ecx & (1 << 17)) != 0;
+    // Only enable PCID if supported
+
+    if pcid_supported {
+        // cr4 |= Cr4Flags::PCID;
+    } 
+    
+    early_println!("[x86] PCID supported: {}", pcid_supported);
+
     unsafe {
         x86_64::registers::control::Cr4::write(cr4);
     }
