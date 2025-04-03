@@ -92,7 +92,7 @@ pub fn main() {
 }
 
 pub fn init() {
-    log::set_max_level(log::LevelFilter::Info);
+    // log::set_max_level(log::LevelFilter::Info);
 
     util::random::init();
     driver::init();

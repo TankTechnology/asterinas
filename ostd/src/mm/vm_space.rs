@@ -182,7 +182,7 @@ impl VmSpace {
             last.cpus.remove(cpu, Ordering::Relaxed);
         }
 
-        // self.pt.activate_with_asid(self.asid);
+        self.pt.activate_with_asid(self.asid);
     }
 
     pub(crate) fn handle_page_fault(

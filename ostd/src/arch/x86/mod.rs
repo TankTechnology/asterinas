@@ -201,7 +201,7 @@ pub(crate) fn enable_cpu_features() {
     // Only enable PCID if supported
 
     if pcid_supported {
-        // cr4 |= Cr4Flags::PCID;
+        cr4 |= Cr4Flags::PCID;
     } 
     
     early_println!("[x86] PCID supported: {}", pcid_supported);
@@ -209,6 +209,9 @@ pub(crate) fn enable_cpu_features() {
     unsafe {
         x86_64::registers::control::Cr4::write(cr4);
     }
+
+    // Store PCID support status in global variable
+    crate::arch::x86::mm::PCID_SUPPORTED.store(cr4.contains(Cr4Flags::PCID), core::sync::atomic::Ordering::Relaxed);
 
     let mut xcr0 = x86_64::registers::xcontrol::XCr0::read();
     xcr0 |= XCr0Flags::AVX | XCr0Flags::SSE;

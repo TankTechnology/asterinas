@@ -3,6 +3,10 @@
 //! ASID (Address Space ID) support for x86.
 
 use core::arch::asm;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Global flag indicating if PCID is supported by the hardware
+pub static PCID_SUPPORTED: AtomicBool = AtomicBool::new(false);
 
 /// The maximum ASID value supported by hardware.
 /// 
@@ -48,6 +52,29 @@ enum InvpcidType {
 
 /// Internal function to execute INVPCID with given parameters
 unsafe fn invpcid_internal(type_: u64, asid: u64, addr: u64) {
+    if !PCID_SUPPORTED.load(Ordering::Relaxed) {
+        // Fallback for systems without PCID support
+        match type_ as usize {
+            // IndividualAddressInvalidation
+            0 => {
+                asm!(
+                    "invlpg [{}]",
+                    in(reg) addr,
+                    options(nostack),
+                );
+            },
+            // SinglePcidInvalidation - flush all non-global
+            1 => super::tlb_flush_all_excluding_global(),
+            // AllPcidInvalidation - flush all including global
+            2 => super::tlb_flush_all_including_global(),
+            // AllPcidInvalidationRetainingGlobal - flush all non-global 
+            3 => super::tlb_flush_all_excluding_global(),
+            _ => panic!("Invalid INVPCID type"),
+        }
+        return;
+    }
+
+    // Use INVPCID if supported
     let descriptor = [addr, asid];
     unsafe {
         asm!(

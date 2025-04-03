@@ -190,6 +190,9 @@ pub fn deallocate(asid: u16) {
         return;
     }
 
+    // deallocate from bitmap allocator
+    ASID_ALLOCATOR.lock().deallocate(asid);
+
     let mut asid_map = ASID_MAP.lock();
     asid_map.remove(&asid);
 }

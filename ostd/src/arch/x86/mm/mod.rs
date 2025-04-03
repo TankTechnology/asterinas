@@ -24,7 +24,7 @@ mod util;
 mod asid;
 
 pub use asid::ASID_CAP;
-pub use asid::{invpcid_all_excluding_global, invpcid_all_including_global, invpcid_single_address, invpcid_single_context};
+pub use asid::{invpcid_all_excluding_global, invpcid_all_including_global, invpcid_single_address, invpcid_single_context, PCID_SUPPORTED};
 
 pub(crate) const NR_ENTRIES_PER_PAGE: usize = 512;
 
@@ -153,6 +153,12 @@ pub unsafe fn activate_page_table(root_paddr: Paddr, root_pt_cache: CachePolicy)
 /// Changing the level 4 page table is unsafe, because it's possible to violate memory safety by
 /// changing the page mapping.
 pub unsafe fn activate_page_table_with_asid(root_paddr: Paddr, asid: u16, root_pt_cache: CachePolicy) {
+    if !asid::PCID_SUPPORTED.load(core::sync::atomic::Ordering::Relaxed) {
+        // If PCID is not supported, just use regular page table activation
+        activate_page_table(root_paddr, root_pt_cache);
+        return;
+    }
+
     // PCID is 12 bits (0-4095)
     let asid_bits = (asid & 0xFFF) as u64;
    
