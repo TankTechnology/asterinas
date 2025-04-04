@@ -198,10 +198,10 @@ pub(crate) fn enable_cpu_features() {
     let ecx = unsafe { core::arch::x86_64::__cpuid(1).ecx };
     // PCID supported by ECX bit 17
     let pcid_supported = (ecx & (1 << 17)) != 0;
-    // Only enable PCID if supported
 
+    // Only enable PCID if supported
     if pcid_supported {
-        cr4 |= Cr4Flags::PCID;
+        // cr4 |= Cr4Flags::PCID;
     } 
     
     early_println!("[x86] PCID supported: {}", pcid_supported);
@@ -211,7 +211,7 @@ pub(crate) fn enable_cpu_features() {
     }
 
     // Store PCID support status in global variable
-    crate::arch::x86::mm::PCID_SUPPORTED.store(cr4.contains(Cr4Flags::PCID), core::sync::atomic::Ordering::Relaxed);
+    crate::arch::x86::mm::PCID_ENABLED.store(cr4.contains(Cr4Flags::PCID), core::sync::atomic::Ordering::Relaxed);
 
     let mut xcr0 = x86_64::registers::xcontrol::XCr0::read();
     xcr0 |= XCr0Flags::AVX | XCr0Flags::SSE;

@@ -5,6 +5,7 @@
 //! This module provides functions to allocate and deallocate ASIDs.
 
 use crate::sync::SpinLock;
+use crate::prelude::*;
 use core::sync::atomic::{AtomicU16, Ordering};
 use log;
 extern crate alloc;
@@ -190,11 +191,23 @@ pub fn deallocate(asid: u16) {
         return;
     }
 
-    // deallocate from bitmap allocator
-    ASID_ALLOCATOR.lock().deallocate(asid);
-
     let mut asid_map = ASID_MAP.lock();
+    
+    // Remove from map first
     asid_map.remove(&asid);
+    
+    // Only deallocate from bitmap if it's in the valid range for the bitmap
+    if asid >= ASID_MIN && asid < ASID_CAP {
+        // Check if this ASID was allocated from the bitmap
+        let index = (asid as usize - ASID_MIN as usize) / 64;
+        let bit = (asid as usize - ASID_MIN as usize) % 64;
+        
+        let mut allocator = ASID_ALLOCATOR.lock();
+        // Only deallocate if the bit is set (indicating it was allocated)
+        if allocator.bitmap[index] & (1 << bit) != 0 {
+            allocator.deallocate(asid);
+        }
+    }
 }
 
 /// Gets the current ASID generation.

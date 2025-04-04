@@ -5,8 +5,8 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-/// Global flag indicating if PCID is supported by the hardware
-pub static PCID_SUPPORTED: AtomicBool = AtomicBool::new(false);
+/// Global flag indicating if PCID is enabled
+pub static PCID_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// The maximum ASID value supported by hardware.
 /// 
@@ -52,7 +52,7 @@ enum InvpcidType {
 
 /// Internal function to execute INVPCID with given parameters
 unsafe fn invpcid_internal(type_: u64, asid: u64, addr: u64) {
-    if !PCID_SUPPORTED.load(Ordering::Relaxed) {
+    if !PCID_ENABLED.load(Ordering::Relaxed) {
         // Fallback for systems without PCID support
         match type_ as usize {
             // IndividualAddressInvalidation
