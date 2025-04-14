@@ -8,10 +8,7 @@ use core::{arch::asm, ops::Range};
 use cfg_if::cfg_if;
 pub(crate) use util::{__memcpy_fallible, __memset_fallible};
 use x86_64::{
-    instructions::tlb,
-    registers::control::Cr3Flags,
-    structures::paging::PhysFrame,
-    VirtAddr,
+    instructions::tlb, registers::control::Cr3Flags, structures::paging::PhysFrame, VirtAddr,
 };
 
 use crate::{
@@ -27,10 +24,7 @@ use crate::{
 mod asid;
 mod util;
 
-pub use asid::{
-    invpcid_all_excluding_global, invpcid_all_including_global, invpcid_single_address,
-    invpcid_single_context, ASID_CAP, PCID_ENABLED,
-};
+pub use asid::{invpcid_all_excluding_global, ASID_CAP, PCID_ENABLED};
 
 pub(crate) const NR_ENTRIES_PER_PAGE: usize = 512;
 

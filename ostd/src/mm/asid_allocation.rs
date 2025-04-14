@@ -5,12 +5,11 @@
 //! This module provides functions to allocate and deallocate ASIDs.
 
 use core::sync::atomic::{AtomicU16, Ordering};
+
 use log;
 
 extern crate alloc;
-use alloc::collections::BTreeMap;
-
-use crate::sync::SpinLock;
+use alloc::collections::{btree_map::Entry, BTreeMap};
 
 /// The maximum ASID value from the architecture.
 ///
@@ -18,6 +17,7 @@ use crate::sync::SpinLock;
 /// that the TLB entries for this address space need to be flushed
 /// using INVPCID on context switch.
 pub use crate::arch::mm::ASID_CAP;
+use crate::sync::SpinLock;
 
 /// The special ASID value that indicates the TLB entries for this
 /// address space need to be flushed on context switch.
@@ -45,7 +45,7 @@ struct AsidAllocator {
     /// The bitmap of allocated ASIDs.
     /// Each bit represents an ASID, where 1 means allocated and 0 means free.
     /// ASIDs start from ASID_MIN.
-    bitmap: [u64; (ASID_CAP as usize - ASID_MIN as usize + 63) / 64],
+    bitmap: [u64; (ASID_CAP as usize - ASID_MIN as usize).div_ceil(64)],
 
     /// The next ASID to try to allocate.
     next: u16,
@@ -55,7 +55,7 @@ impl AsidAllocator {
     /// Creates a new ASID allocator.
     const fn new() -> Self {
         Self {
-            bitmap: [0; (ASID_CAP as usize - ASID_MIN as usize + 63) / 64],
+            bitmap: [0; (ASID_CAP as usize - ASID_MIN as usize).div_ceil(64)],
             next: ASID_MIN,
         }
     }
@@ -113,7 +113,7 @@ impl AsidAllocator {
             return;
         }
 
-        assert!(asid >= ASID_MIN && asid < ASID_CAP, "ASID out of range");
+        assert!((ASID_MIN..ASID_CAP).contains(&asid), "ASID out of range");
 
         let index = (asid as usize - ASID_MIN as usize) / 64;
         let bit = (asid as usize - ASID_MIN as usize) % 64;
@@ -177,9 +177,9 @@ fn find_free_asid(
 ) -> Option<u16> {
     // Search for a free ASID in the range of ASID_MIN to ASID_CAP
     for asid in ASID_MIN..=ASID_CAP {
-        if !asid_map.contains_key(&asid) {
+        if let Entry::Vacant(e) = asid_map.entry(asid) {
             log::debug!("[ASID] Found free ASID: {}", asid);
-            asid_map.insert(asid, generation);
+            e.insert(generation);
             return Some(asid);
         }
     }
@@ -198,7 +198,7 @@ pub fn deallocate(asid: u16) {
     asid_map.remove(&asid);
 
     // Only deallocate from bitmap if it's in the valid range for the bitmap
-    if asid >= ASID_MIN && asid < ASID_CAP {
+    if (ASID_MIN..ASID_CAP).contains(&asid) {
         ASID_ALLOCATOR.lock().deallocate(asid);
     }
 }
@@ -221,4 +221,3 @@ pub fn increment_generation() {
     // Update the generation
     ASID_GENERATION.store(next_generation, Ordering::Release);
 }
-

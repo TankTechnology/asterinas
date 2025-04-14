@@ -8,6 +8,7 @@ pub type Vaddr = usize;
 /// Physical addresses.
 pub type Paddr = usize;
 
+pub mod asid_allocation;
 pub(crate) mod dma;
 pub mod frame;
 pub mod heap;
@@ -18,7 +19,6 @@ pub(crate) mod page_prop;
 pub(crate) mod page_table;
 pub mod tlb;
 pub mod vm_space;
-pub mod asid_allocation;
 
 #[cfg(ktest)]
 mod test;

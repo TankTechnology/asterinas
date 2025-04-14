@@ -127,4 +127,3 @@ pub unsafe fn invpcid_all_excluding_global() {
 pub unsafe fn invpcid_all_including_global() {
     invpcid_internal(InvpcidType::AllPcidInvalidation as u64, 0, 0);
 }
-

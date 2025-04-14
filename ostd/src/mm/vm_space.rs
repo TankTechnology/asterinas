@@ -13,8 +13,8 @@ use core::{ops::Range, sync::atomic::Ordering};
 
 use crate::{
     arch::mm::{
-        current_page_table_paddr, tlb_flush_all_excluding_global, PageTableEntry, PagingConsts,
-        invpcid_all_excluding_global,
+        current_page_table_paddr, invpcid_all_excluding_global, tlb_flush_all_excluding_global,
+        PageTableEntry, PagingConsts,
     },
     cpu::{AtomicCpuSet, CpuSet, PinCurrentCpu},
     cpu_local_cell,
@@ -180,7 +180,8 @@ impl VmSpace {
         let _activation_lock = self.activation_lock.write();
 
         let current_generation = asid_allocation::current_generation();
-        let need_flush = self.asid == ASID_FLUSH_REQUIRED || self.asid_generation != current_generation;
+        let need_flush =
+            self.asid == ASID_FLUSH_REQUIRED || self.asid_generation != current_generation;
 
         if need_flush {
             unsafe {
@@ -200,7 +201,7 @@ impl VmSpace {
             last.cpus.remove(cpu, Ordering::Relaxed);
         }
 
-        self.pt.activate();
+        self.pt.activate_with_asid(self.asid);
     }
 
     /// Creates a reader to read data from the user space of the current task.
