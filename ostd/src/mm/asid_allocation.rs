@@ -5,7 +5,6 @@
 //! This module provides functions to allocate and deallocate ASIDs.
 
 use crate::sync::SpinLock;
-use crate::prelude::*;
 use core::sync::atomic::{AtomicU16, Ordering};
 use log;
 extern crate alloc;

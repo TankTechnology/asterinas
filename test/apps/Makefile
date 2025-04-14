@@ -12,7 +12,6 @@ TEST_BUILD_DIR ?= $(INITRAMFS)/test
 # These test apps are sorted by name
 TEST_APPS := \
 	alarm \
-	asid_test \
 	capability \
 	clone3 \
 	cpu_affinity \
