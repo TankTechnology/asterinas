@@ -4,14 +4,16 @@
 //!
 //! This module provides functions to allocate and deallocate ASIDs.
 
-use crate::sync::SpinLock;
 use core::sync::atomic::{AtomicU16, Ordering};
 use log;
+
 extern crate alloc;
 use alloc::collections::BTreeMap;
 
+use crate::sync::SpinLock;
+
 /// The maximum ASID value from the architecture.
-/// 
+///
 /// When we run out of ASIDs, we use this special value to indicate
 /// that the TLB entries for this address space need to be flushed
 /// using INVPCID on context switch.
@@ -22,7 +24,7 @@ pub use crate::arch::mm::ASID_CAP;
 pub const ASID_FLUSH_REQUIRED: u16 = ASID_CAP;
 
 /// The lowest ASID value that can be allocated.
-/// 
+///
 /// ASID 0 is typically reserved for the kernel.
 pub const ASID_MIN: u16 = 1;
 
@@ -36,7 +38,7 @@ static ASID_MAP: SpinLock<BTreeMap<u16, u16>> = SpinLock::new(BTreeMap::new());
 static ASID_GENERATION: AtomicU16 = AtomicU16::new(0);
 
 /// ASID allocator.
-/// 
+///
 /// This structure manages the allocation and deallocation of ASIDs.
 /// ASIDs are used to avoid TLB flushes when switching between processes.
 struct AsidAllocator {
@@ -122,7 +124,7 @@ impl AsidAllocator {
 }
 
 /// Allocates a new ASID.
-/// 
+///
 /// Returns the allocated ASID, or `ASID_FLUSH_REQUIRED` if no ASIDs are available.
 pub fn allocate() -> u16 {
     let bitmap_asid = ASID_ALLOCATOR.lock().allocate();
@@ -144,10 +146,10 @@ pub fn allocate() -> u16 {
 
     // If no free ASID found, increment generation and reset bitmap
     increment_generation();
-    
+
     // Reset bitmap allocator
     *ASID_ALLOCATOR.lock() = AsidAllocator::new();
-    
+
     // Try again
     let new_generation = current_generation();
     let bitmap_asid = ASID_ALLOCATOR.lock().allocate();
@@ -167,9 +169,12 @@ pub fn allocate() -> u16 {
 }
 
 /// Finds a free ASID in the range of ASID_MIN to ASID_CAP.
-/// 
+///
 /// Returns the found ASID if it is free, otherwise returns `None`.
-fn find_free_asid(asid_map: &mut impl core::ops::DerefMut<Target = BTreeMap<u16, u16>>, generation: u16) -> Option<u16> {
+fn find_free_asid(
+    asid_map: &mut impl core::ops::DerefMut<Target = BTreeMap<u16, u16>>,
+    generation: u16,
+) -> Option<u16> {
     // Search for a free ASID in the range of ASID_MIN to ASID_CAP
     for asid in ASID_MIN..=ASID_CAP {
         if !asid_map.contains_key(&asid) {
@@ -188,10 +193,10 @@ pub fn deallocate(asid: u16) {
     }
 
     let mut asid_map = ASID_MAP.lock();
-    
+
     // Remove from map first
     asid_map.remove(&asid);
-    
+
     // Only deallocate from bitmap if it's in the valid range for the bitmap
     if asid >= ASID_MIN && asid < ASID_CAP {
         ASID_ALLOCATOR.lock().deallocate(asid);
@@ -204,7 +209,7 @@ pub fn current_generation() -> u16 {
 }
 
 /// Increments the ASID generation.
-/// 
+///
 /// This is called when we run out of ASIDs and need to flush all TLBs.
 pub fn increment_generation() {
     let next_generation = ASID_GENERATION.load(Ordering::Acquire).wrapping_add(1);

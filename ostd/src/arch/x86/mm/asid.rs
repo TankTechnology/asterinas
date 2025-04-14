@@ -2,14 +2,16 @@
 
 //! ASID (Address Space ID) support for x86.
 
-use core::arch::asm;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{
+    arch::asm,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 /// Global flag indicating if PCID is enabled
 pub static PCID_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// The maximum ASID value supported by hardware.
-/// 
+///
 /// The PCID (Process-Context Identifier) on x86-64 architectures is 12 bits.
 /// This means the maximum ASID value is 2^12-1 = 4095.
 /// We reserve 0 for the kernel.
@@ -62,12 +64,12 @@ unsafe fn invpcid_internal(type_: u64, asid: u64, addr: u64) {
                     in(reg) addr,
                     options(nostack),
                 );
-            },
+            }
             // SinglePcidInvalidation - flush all non-global
             1 => super::tlb_flush_all_excluding_global(),
             // AllPcidInvalidation - flush all including global
             2 => super::tlb_flush_all_including_global(),
-            // AllPcidInvalidationRetainingGlobal - flush all non-global 
+            // AllPcidInvalidationRetainingGlobal - flush all non-global
             3 => super::tlb_flush_all_excluding_global(),
             _ => panic!("Invalid INVPCID type"),
         }
@@ -87,36 +89,40 @@ unsafe fn invpcid_internal(type_: u64, asid: u64, addr: u64) {
 }
 
 /// Invalidate a TLB entry for a specific ASID and virtual address.
-/// 
+///
 /// # Safety
-/// 
+///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_single_address(asid: u16, addr: usize) {
-    invpcid_internal(InvpcidType::IndividualAddressInvalidation as u64, asid as u64, addr as u64);
+    invpcid_internal(
+        InvpcidType::IndividualAddressInvalidation as u64,
+        asid as u64,
+        addr as u64,
+    );
 }
 
 /// Invalidate all TLB entries for a specific ASID.
-/// 
+///
 /// # Safety
-/// 
+///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_single_context(asid: u16) {
     invpcid_internal(InvpcidType::SinglePcidInvalidation as u64, asid as u64, 0);
 }
 
 /// Invalidate all TLB entries for all contexts.
-/// 
+///
 /// # Safety
-/// 
+///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_all_excluding_global() {
     invpcid_internal(InvpcidType::AllPcidInvalidationRetainingGlobal as u64, 0, 0);
 }
 
 /// Invalidate all TLB entries for all contexts, including global translations.
-/// 
+///
 /// # Safety
-/// 
+///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_all_including_global() {
     invpcid_internal(InvpcidType::AllPcidInvalidation as u64, 0, 0);
