@@ -53,6 +53,7 @@ use log::info;
 
 use crate::{
     arch::mm::PagingConsts,
+    boot::memory_region::MemoryRegionType,
     const_assert,
     mm::{
         frame::allocator::{self, EarlyAllocatedFrameMeta},
@@ -169,6 +170,13 @@ macro_rules! impl_frame_meta_for {
     ($t:ty) => {
         // SAFETY: `on_drop` won't read the page.
         unsafe impl $crate::mm::frame::meta::AnyFrameMeta for $t {}
+
+        $crate::const_assert!(
+            core::mem::size_of::<$t>() <= $crate::mm::frame::meta::FRAME_METADATA_MAX_SIZE
+        );
+        $crate::const_assert!(
+            $crate::mm::frame::meta::FRAME_METADATA_MAX_ALIGN % core::mem::align_of::<$t>() == 0
+        );
     };
 }
 
@@ -444,7 +452,12 @@ impl_frame_meta_for!(MetaPageMeta);
 pub(crate) unsafe fn init() -> Segment<MetaPageMeta> {
     let max_paddr = {
         let regions = &crate::boot::EARLY_INFO.get().unwrap().memory_regions;
-        regions.iter().map(|r| r.base() + r.len()).max().unwrap()
+        regions
+            .iter()
+            .filter(|r| r.typ() == MemoryRegionType::Usable)
+            .map(|r| r.base() + r.len())
+            .max()
+            .unwrap()
     };
 
     info!(
@@ -560,8 +573,11 @@ macro_rules! mark_ranges {
 fn mark_unusable_ranges() {
     let regions = &crate::boot::EARLY_INFO.get().unwrap().memory_regions;
 
-    for region in regions.iter() {
-        use crate::boot::memory_region::MemoryRegionType;
+    for region in regions
+        .iter()
+        .rev()
+        .skip_while(|r| r.typ() != MemoryRegionType::Usable)
+    {
         match region.typ() {
             MemoryRegionType::BadMemory => mark_ranges!(region, UnusableMemoryMeta),
             MemoryRegionType::Unknown => mark_ranges!(region, UnusableMemoryMeta),

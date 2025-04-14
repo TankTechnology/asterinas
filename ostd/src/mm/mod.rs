@@ -20,6 +20,9 @@ pub mod tlb;
 pub mod vm_space;
 pub mod asid_allocation;
 
+#[cfg(ktest)]
+mod test;
+
 use core::{fmt::Debug, ops::Range};
 
 pub use self::{

@@ -21,9 +21,13 @@
 
 #![no_std]
 #![no_main]
+#![feature(maybe_uninit_fill)]
+#![feature(maybe_uninit_slice)]
+#![feature(maybe_uninit_write_slice)]
 
 mod console;
 mod loader;
+mod sync;
 
 // The entry points are defined in `x86/*/setup.S`.
 mod x86;

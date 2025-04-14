@@ -216,6 +216,10 @@ fn add_manifest_dependency(
 
     let dependencies = manifest.get_mut("dependencies").unwrap();
 
+    // We disable default features when depending on the target crate, and add
+    // all the default features as the default features of the base crate, to
+    // allow controls from the users.
+    // See `add_feature_entries` for more details.
     let target_dep = toml::Table::from_str(&format!(
         "{} = {{ path = \"{}\", default-features = false }}",
         crate_name,

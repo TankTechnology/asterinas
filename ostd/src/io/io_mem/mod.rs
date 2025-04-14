@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! I/O memory.
+//! I/O memory and its allocator that allocates memory I/O (MMIO) to device drivers.
+
+mod allocator;
 
 use core::ops::{Deref, Range};
 
 use align_ext::AlignExt;
-use cfg_if::cfg_if;
 
+pub(super) use self::allocator::init;
+pub(crate) use self::allocator::IoMemAllocatorBuilder;
 use crate::{
+    if_tdx_enabled,
     mm::{
         kspace::kvirt_area::{KVirtArea, Untracked},
         page_prop::{CachePolicy, PageFlags, PageProperty, PrivilegedPageFlags},
@@ -35,52 +39,13 @@ impl HasPaddr for IoMem {
 }
 
 impl IoMem {
-    /// Creates a new `IoMem`.
-    ///
-    /// # Safety
-    ///
-    /// - The given physical address range must be in the I/O memory region.
-    /// - Reading from or writing to I/O memory regions may have side effects. Those side effects
-    ///   must not cause soundness problems (e.g., they must not corrupt the kernel memory).
-    pub(crate) unsafe fn new(range: Range<Paddr>, flags: PageFlags, cache: CachePolicy) -> Self {
-        let first_page_start = range.start.align_down(PAGE_SIZE);
-        let last_page_end = range.end.align_up(PAGE_SIZE);
-        let mut new_kvirt_area = KVirtArea::<Untracked>::new(last_page_end - first_page_start);
-
-        cfg_if! {
-            if #[cfg(all(feature = "cvm_guest", target_arch = "x86_64"))] {
-                let priv_flags = if tdx_guest::tdx_is_enabled() {
-                    PrivilegedPageFlags::SHARED
-                } else {
-                    PrivilegedPageFlags::empty()
-                };
-            } else {
-                let priv_flags = PrivilegedPageFlags::empty();
-            }
-        }
-
-        let prop = PageProperty {
-            flags,
-            cache,
-            priv_flags,
-        };
-
-        // SAFETY: The caller of `IoMem::new()` and the constructor of `new_kvirt_area` has ensured the
-        // safety of this mapping.
-        unsafe {
-            new_kvirt_area.map_untracked_pages(
-                new_kvirt_area.range(),
-                first_page_start..last_page_end,
-                prop,
-            );
-        }
-
-        Self {
-            kvirt_area: Arc::new(new_kvirt_area),
-            offset: range.start - first_page_start,
-            limit: range.len(),
-            pa: range.start,
-        }
+    /// Acquires an `IoMem` instance for the given range.
+    pub fn acquire(range: Range<Paddr>) -> Result<IoMem> {
+        allocator::IO_MEM_ALLOCATOR
+            .get()
+            .unwrap()
+            .acquire(range)
+            .ok_or(Error::AccessDenied)
     }
 
     /// Returns the physical address of the I/O memory.
@@ -108,6 +73,48 @@ impl IoMem {
             offset: self.offset + range.start,
             limit: range.len(),
             pa: self.pa + range.start,
+        }
+    }
+
+    /// Creates a new `IoMem`.
+    ///
+    /// # Safety
+    ///
+    /// - The given physical address range must be in the I/O memory region.
+    /// - Reading from or writing to I/O memory regions may have side effects. Those side effects
+    ///   must not cause soundness problems (e.g., they must not corrupt the kernel memory).
+    pub(crate) unsafe fn new(range: Range<Paddr>, flags: PageFlags, cache: CachePolicy) -> Self {
+        let first_page_start = range.start.align_down(PAGE_SIZE);
+        let last_page_end = range.end.align_up(PAGE_SIZE);
+
+        let priv_flags = if_tdx_enabled!({
+            PrivilegedPageFlags::SHARED
+        } else {
+            PrivilegedPageFlags::empty()
+        });
+
+        let prop = PageProperty {
+            flags,
+            cache,
+            priv_flags,
+        };
+
+        // SAFETY: The caller of `IoMem::new()` and the constructor of `new_kvirt_area` has ensured the
+        // safety of this mapping.
+        let new_kvirt_area = unsafe {
+            KVirtArea::<Untracked>::map_untracked_pages(
+                last_page_end - first_page_start,
+                0,
+                first_page_start..last_page_end,
+                prop,
+            )
+        };
+
+        Self {
+            kvirt_area: Arc::new(new_kvirt_area),
+            offset: range.start - first_page_start,
+            limit: range.len(),
+            pa: range.start,
         }
     }
 }
@@ -190,5 +197,13 @@ impl VmIoOnce for IoMem {
 
     fn write_once<T: PodOnce>(&self, offset: usize, new_val: &T) -> Result<()> {
         self.writer().skip(offset).write_once(new_val)
+    }
+}
+
+impl Drop for IoMem {
+    fn drop(&mut self) {
+        // TODO: Multiple `IoMem` instances should not overlap, we should refactor the driver code and
+        // remove the `Clone` and `IoMem::slice`. After refactoring, the `Drop` can be implemented to recycle
+        // the `IoMem`.
     }
 }

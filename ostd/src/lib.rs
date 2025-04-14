@@ -32,7 +32,7 @@ pub mod collections;
 pub mod console;
 pub mod cpu;
 mod error;
-pub mod io_mem;
+pub mod io;
 pub mod logger;
 pub mod mm;
 pub mod panic;
@@ -43,7 +43,7 @@ pub mod task;
 pub mod timer;
 pub mod trap;
 pub mod user;
-mod util;
+pub(crate) mod util;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -77,20 +77,18 @@ unsafe fn init() {
         mm::frame::allocator::init_early_allocator();
     }
 
-    arch::serial::init();
-
-    #[cfg(feature = "cvm_guest")]
-    arch::init_cvm_guest();
+    if_tdx_enabled!({
+    } else {
+        arch::serial::init();
+    });
 
     logger::init();
 
-    // SAFETY: They are only called once on BSP and ACPI has been initialized.
-    // No CPU local objects have been accessed by this far.
-    unsafe {
-        cpu::init_num_cpus();
-        cpu::local::init_on_bsp();
-        cpu::set_this_cpu_id(0);
-    }
+    // SAFETY:
+    // 1. They are only called once in the boot context of the BSP.
+    // 2. The number of CPUs are available because ACPI has been initialized.
+    // 3. No CPU-local objects have been accessed yet.
+    unsafe { cpu::init_on_bsp() };
 
     // SAFETY: We are on the BSP and APs are not yet started.
     let meta_pages = unsafe { mm::frame::meta::init() };
@@ -108,6 +106,11 @@ unsafe fn init() {
     mm::dma::init();
 
     unsafe { arch::late_init_on_bsp() };
+
+    if_tdx_enabled!({
+        arch::serial::init();
+    });
+    arch::serial::callback_init();
 
     smp::init();
 
