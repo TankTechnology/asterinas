@@ -216,8 +216,6 @@ pub(crate) fn enable_cpu_features() {
         cr4 |= Cr4Flags::PCID;
     } 
     
-    early_println!("[x86] PCID supported: {}", pcid_supported);
-
     unsafe {
         x86_64::registers::control::Cr4::write(cr4);
     }
