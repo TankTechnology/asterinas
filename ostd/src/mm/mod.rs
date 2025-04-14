@@ -18,6 +18,7 @@ pub(crate) mod page_prop;
 pub(crate) mod page_table;
 pub mod tlb;
 pub mod vm_space;
+pub mod asid_allocation;
 
 #[cfg(ktest)]
 mod test;
