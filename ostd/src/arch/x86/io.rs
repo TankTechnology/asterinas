@@ -54,3 +54,6 @@ pub(super) fn construct_io_mem_allocator_builder() -> IoMemAllocatorBuilder {
     // SAFETY: The range is guaranteed not to access physical memory.
     unsafe { IoMemAllocatorBuilder::new(ranges) }
 }
+
+/// Port I/O definition reference: https://bochs.sourceforge.io/techspec/PORTS.LST
+pub const MAX_IO_PORT: u16 = u16::MAX;

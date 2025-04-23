@@ -2,11 +2,11 @@
 
 //! Platform-specific code for the x86 platform.
 
-mod allocator;
 pub mod boot;
 pub(crate) mod cpu;
 pub mod device;
 pub(crate) mod ex_table;
+pub(crate) mod io;
 pub mod iommu;
 pub(crate) mod irq;
 pub(crate) mod kernel;
@@ -18,20 +18,12 @@ pub mod task;
 pub mod timer;
 pub mod trap;
 
-use allocator::construct_io_mem_allocator_builder;
-use cfg_if::cfg_if;
+use io::construct_io_mem_allocator_builder;
 use spin::Once;
 use x86::cpuid::{CpuId, FeatureInfo};
 
-use crate::if_tdx_enabled;
-
-cfg_if! {
-    if #[cfg(feature = "cvm_guest")] {
-        pub(crate) mod tdx_guest;
-
-        use ::tdx_guest::{init_tdx, tdcall::InitError};
-    }
-}
+#[cfg(feature = "cvm_guest")]
+pub(crate) mod tdx_guest;
 
 use core::{
     arch::x86_64::{_rdrand64_step, _rdtsc},
@@ -43,7 +35,7 @@ use log::{info, warn};
 
 #[cfg(feature = "cvm_guest")]
 pub(crate) fn init_cvm_guest() {
-    match init_tdx() {
+    match ::tdx_guest::init_tdx() {
         Ok(td_info) => {
             crate::early_println!(
                 "[kernel] Intel TDX initialized\n[kernel] td gpaw: {}, td attributes: {:?}",
@@ -51,7 +43,7 @@ pub(crate) fn init_cvm_guest() {
                 td_info.attributes
             );
         }
-        Err(InitError::TdxGetVpInfoError(td_call_error)) => {
+        Err(::tdx_guest::tdcall::InitError::TdxGetVpInfoError(td_call_error)) => {
             panic!(
                 "[kernel] Intel TDX not initialized, Failed to get TD info: {:?}",
                 td_call_error
@@ -70,12 +62,11 @@ static CPU_FEATURES: Once<FeatureInfo> = Once::new();
 ///
 /// # Safety
 ///
-/// This function must be called only once on the bootstrapping processor.
+/// This function must be called only once in the boot context of the
+/// bootstrapping processor.
 pub(crate) unsafe fn late_init_on_bsp() {
-    // SAFETY: this function is only called once on BSP.
-    unsafe {
-        crate::arch::trap::init(true);
-    }
+    // SAFETY: This function is only called once on BSP.
+    unsafe { trap::init() };
     irq::init();
 
     kernel::acpi::init();
@@ -95,7 +86,7 @@ pub(crate) unsafe fn late_init_on_bsp() {
     kernel::tsc::init_tsc_freq();
     timer::init_bsp();
 
-    // SAFETY: we're on the BSP and we're ready to boot all APs.
+    // SAFETY: We're on the BSP and we're ready to boot all APs.
     unsafe { crate::boot::smp::boot_all_aps() };
 
     if_tdx_enabled!({
@@ -109,10 +100,11 @@ pub(crate) unsafe fn late_init_on_bsp() {
     // Some driver like serial may use PIC
     kernel::pic::init();
 
-    // SAFETY: All the system device memory I/Os have been removed from the builder.
-    unsafe {
-        crate::io::init(io_mem_builder);
-    }
+    // SAFETY:
+    // 1. All the system device memory have been removed from the builder.
+    // 2. All the port I/O regions belonging to the system device are defined using the macros.
+    // 3. `MAX_IO_PORT` defined in `crate::arch::io` is the maximum value specified by x86-64.
+    unsafe { crate::io::init(io_mem_builder) };
 }
 
 /// Architecture-specific initialization on the application processor.
@@ -284,3 +276,5 @@ macro_rules! if_tdx_enabled {
         }
     }};
 }
+
+pub use if_tdx_enabled;

@@ -27,6 +27,7 @@ TESTS ?= \
 	mount_test \
 	open_create_test \
 	open_test \
+	ppoll_test \
 	prctl_setuid_test \
 	pread64_test \
 	preadv2_test \
@@ -46,6 +47,7 @@ TESTS ?= \
 	sigaction_test \
 	sigaltstack_test \
 	signalfd_test \
+	socket_netlink_route_test \
 	stat_test \
 	stat_times_test \
 	statfs_test \

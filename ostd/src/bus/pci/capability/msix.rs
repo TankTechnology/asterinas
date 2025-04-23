@@ -7,25 +7,19 @@
 
 use alloc::{sync::Arc, vec::Vec};
 
-use cfg_if::cfg_if;
-
 use crate::{
-    arch::iommu::has_interrupt_remapping,
+    arch::{
+        iommu::has_interrupt_remapping,
+        pci::{construct_remappable_msix_address, MSIX_DEFAULT_MSG_ADDR},
+    },
     bus::pci::{
         cfg_space::{Bar, Command, MemoryBar},
         common_device::PciCommonDevice,
         device_info::PciDeviceLocation,
     },
-    if_tdx_enabled,
     mm::VmIoOnce,
     trap::IrqLine,
 };
-
-cfg_if! {
-    if #[cfg(all(target_arch = "x86_64", feature = "cvm_guest"))] {
-        use crate::arch::tdx_guest;
-    }
-}
 
 /// MSI-X capability. It will set the BAR space it uses to be hidden.
 #[derive(Debug)]
@@ -59,9 +53,6 @@ impl Clone for CapabilityMsixData {
         }
     }
 }
-
-#[cfg(target_arch = "x86_64")]
-const MSIX_DEFAULT_MSG_ADDR: u32 = 0xFEE0_0000;
 
 impl CapabilityMsixData {
     pub(super) fn new(dev: &mut PciCommonDevice, cap_ptr: u16) -> Self {
@@ -108,8 +99,8 @@ impl CapabilityMsixData {
 
         // Set message address 0xFEE0_0000
         for i in 0..table_size {
-            if_tdx_enabled!({
-                #[cfg(target_arch = "x86_64")]
+            #[cfg(target_arch = "x86_64")]
+            crate::arch::if_tdx_enabled!({
                 // SAFETY:
                 // This is safe because we are ensuring that the physical address of the MSI-X table is valid before this operation.
                 // We are also ensuring that we are only unprotecting a single page.
@@ -119,7 +110,8 @@ impl CapabilityMsixData {
                 // In addition, due to granularity, the minimum value that can be set here is only one page.
                 // Therefore, we are not causing any undefined behavior or violating any of the requirements of the `unprotect_gpa_range` function.
                 unsafe {
-                    tdx_guest::unprotect_gpa_range(table_bar.io_mem().paddr(), 1).unwrap();
+                    crate::arch::tdx_guest::unprotect_gpa_range(table_bar.io_mem().paddr(), 1)
+                        .unwrap();
                 }
             });
             // Set message address and disable this msix entry
@@ -174,18 +166,7 @@ impl CapabilityMsixData {
 
         // If interrupt remapping is enabled, then we need to change the value of the message address.
         if has_interrupt_remapping() {
-            let mut handle = irq.inner_irq().bind_remapping_entry().unwrap().lock();
-
-            // Enable irt entry
-            let irt_entry_mut = handle.irt_entry_mut().unwrap();
-            irt_entry_mut.enable_default(irq.num() as u32);
-
-            // Use remappable format. The bits[4:3] should be always set to 1 according to the manual.
-            let mut address = MSIX_DEFAULT_MSG_ADDR | 0b1_1000;
-
-            // Interrupt index[14:0] is on address[19:5] and interrupt index[15] is on address[2].
-            address |= (handle.index() as u32 & 0x7FFF) << 5;
-            address |= (handle.index() as u32 & 0x8000) >> 13;
+            let address = construct_remappable_msix_address(&irq);
 
             self.table_bar
                 .io_mem()

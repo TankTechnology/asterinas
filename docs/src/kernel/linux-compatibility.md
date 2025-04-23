@@ -291,7 +291,7 @@ provided by Linux on x86-64 architecture.
 | 268     | fchmodat         | ✅              |
 | 269     | faccessat        | ✅              |
 | 270     | pselect6         | ✅              |
-| 271     | ppoll            | ❌              |
+| 271     | ppoll            | ✅              |
 | 272     | unshare          | ❌              |
 | 273     | set_robust_list  | ✅              |
 | 274     | get_robust_list  | ❌              |
@@ -340,6 +340,7 @@ provided by Linux on x86-64 architecture.
 | 322	  | execveat         | ✅              |
 | 327	  | preadv2          | ✅              |
 | 328	  | pwritev2         | ✅              |
+| 332     | statx            | ✅              |
 | 435	  | clone3           | ✅              |
 
 ## File Systems

@@ -11,6 +11,7 @@
 #![feature(btree_extract_if)]
 #![feature(debug_closure_helpers)]
 #![feature(extend_one)]
+#![feature(extract_if)]
 #![feature(fn_traits)]
 #![feature(format_args_nl)]
 #![feature(int_roundings)]
@@ -28,6 +29,7 @@
 #![feature(step_trait)]
 #![feature(trait_alias)]
 #![feature(trait_upcasting)]
+#![feature(associated_type_defaults)]
 #![register_tool(component_access_control)]
 
 use kcmdline::KCmdlineArg;
