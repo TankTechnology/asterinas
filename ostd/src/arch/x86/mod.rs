@@ -212,7 +212,7 @@ pub(crate) fn enable_cpu_features() {
     }
 
     // Store PCID support status in global variable
-    crate::arch::x86::mm::PCID_ENABLED.store(
+    mm::PCID_ENABLED.store(
         cr4.contains(Cr4Flags::PCID),
         core::sync::atomic::Ordering::Relaxed,
     );

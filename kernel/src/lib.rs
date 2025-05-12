@@ -6,7 +6,6 @@
 #![no_std]
 #![no_main]
 #![deny(unsafe_code)]
-#![expect(incomplete_features)]
 #![feature(btree_cursors)]
 #![feature(btree_extract_if)]
 #![feature(debug_closure_helpers)]
@@ -15,6 +14,7 @@
 #![feature(fn_traits)]
 #![feature(format_args_nl)]
 #![feature(int_roundings)]
+#![feature(integer_sign_cast)]
 #![feature(let_chains)]
 #![feature(linked_list_cursors)]
 #![feature(linked_list_remove)]
@@ -22,23 +22,20 @@
 #![feature(negative_impls)]
 #![feature(panic_can_unwind)]
 #![feature(register_tool)]
-// FIXME: This feature is used to support vm capbility now as a work around.
-// Since this is an incomplete feature, use this feature is unsafe.
-// We should find a proper method to replace this feature with min_specialization, which is a sound feature.
-#![feature(specialization)]
 #![feature(step_trait)]
 #![feature(trait_alias)]
 #![feature(trait_upcasting)]
 #![feature(associated_type_defaults)]
 #![register_tool(component_access_control)]
 
+use aster_framebuffer::FRAMEBUFFER_CONSOLE;
 use kcmdline::KCmdlineArg;
 use ostd::{
     arch::qemu::{exit_qemu, QemuExitCode},
     boot::boot_info,
     cpu::{CpuId, CpuSet, PinCurrentCpu},
 };
-use process::Process;
+use process::{spawn_init_process, Process};
 use sched::SchedPolicy;
 
 use crate::{prelude::*, thread::kernel_thread::ThreadOptions};
@@ -145,9 +142,16 @@ fn init_thread() {
 
     print_banner();
 
+    // FIXME: CI fails due to suspected performance issues with the framebuffer console.
+    // Additionally, userspace program may render GUIs using the framebuffer,
+    // so we disable the framebuffer console here.
+    if let Some(console) = FRAMEBUFFER_CONSOLE.get() {
+        console.disable();
+    };
+
     let karg: KCmdlineArg = boot_info().kernel_cmdline.as_str().into();
 
-    let initproc = Process::spawn_user_process(
+    let initproc = spawn_init_process(
         karg.get_initproc_path().unwrap(),
         karg.get_initproc_argv().to_vec(),
         karg.get_initproc_envp().to_vec(),

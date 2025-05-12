@@ -12,6 +12,7 @@
 #  - VSOCK: "off" or "on";
 #  - SMP: number of CPUs;
 #  - MEM: amount of memory, e.g. "8G".
+#  - VNC_PORT: VNC port, default is "42".
 
 OVMF=${OVMF:-"on"}
 VHOST=${VHOST:-"off"}
@@ -52,13 +53,11 @@ if [ "$1" = "tdx" ]; then
         -vga none \
         -nographic \
         -monitor pty \
-        -no-hpet \
         -nodefaults \
-        -bios /usr/share/qemu/OVMF.fd \
-        -object tdx-guest,sept-ve-disable=on,id=tdx,quote-generation-service=vsock:2:4050 \
+        -bios /root/ovmf/release/OVMF.fd \
+        -object tdx-guest,sept-ve-disable=on,id=tdx0 \
         -cpu host,-kvm-steal-time,pmu=off \
-        -machine q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=ram1 \
-        -object memory-backend-memfd-private,id=ram1,size=${MEM:-8G} \
+        -machine q35,kernel-irqchip=split,confidential-guest-support=tdx0 \
         -device virtio-net-pci,netdev=net01,disable-legacy=on,disable-modern=off$VIRTIO_NET_FEATURES \
         -device virtio-keyboard-pci,disable-legacy=on,disable-modern=off \
         $NETDEV_ARGS \
@@ -80,7 +79,7 @@ COMMON_QEMU_ARGS="\
     -m ${MEM:-8G} \
     --no-reboot \
     -nographic \
-    -display none \
+    -display vnc=0.0.0.0:${VNC_PORT:-42} \
     -serial chardev:mux \
     -monitor chardev:mux \
     -chardev stdio,id=mux,mux=on,signal=off,logfile=qemu.log \
@@ -157,7 +156,7 @@ if [ "$OVMF" = "on" ]; then
     if [ "$1" = "test" ]; then
         echo "We use QEMU direct boot for testing, which does not support OVMF, ignoring OVMF" 1>&2
     else
-        OVMF_PATH="/usr/share/OVMF"
+        OVMF_PATH="/root/ovmf/release"
         QEMU_ARGS="${QEMU_ARGS} \
             -drive if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_PATH/OVMF_CODE.fd \
             -drive if=pflash,format=raw,unit=1,file=$OVMF_PATH/OVMF_VARS.fd \
