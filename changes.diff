@@ -1,0 +1,686 @@
+diff --git a/kernel/src/arch/x86/cpu.rs b/kernel/src/arch/x86/cpu.rs
+index 79fe9cbc..7a37ecaa 100644
+--- a/kernel/src/arch/x86/cpu.rs
++++ b/kernel/src/arch/x86/cpu.rs
+@@ -476,6 +476,10 @@ impl CpuInfo {
+         if feature_info.has_pbe() {
+             flags.push("pbe");
+         }
++        if feature_info.has_pcid() {
++            flags.push("pcid");
++        }
++
+         flags.join(" ")
+     }
+ 
+diff --git a/ostd/src/arch/x86/mm/asid.rs b/ostd/src/arch/x86/mm/asid.rs
+new file mode 100644
+index 00000000..bdc09654
+--- /dev/null
++++ b/ostd/src/arch/x86/mm/asid.rs
+@@ -0,0 +1,129 @@
++// SPDX-License-Identifier: MPL-2.0
++
++//! ASID (Address Space ID) support for x86.
++
++use core::{
++    arch::asm,
++    sync::atomic::{AtomicBool, Ordering},
++};
++
++/// Global flag indicating if PCID is enabled
++pub static PCID_ENABLED: AtomicBool = AtomicBool::new(false);
++
++/// The maximum ASID value supported by hardware.
++///
++/// The PCID (Process-Context Identifier) on x86-64 architectures is 12 bits.
++/// This means the maximum ASID value is 2^12-1 = 4095.
++/// We reserve 0 for the kernel.
++pub const ASID_CAP: u16 = 4095;
++
++/// invpcid instruction:
++/// INVPCID_TYPE := value of register operand; // must be in the range of 0–3
++/// INVPCID_DESC := value of memory operand;
++/// CASE INVPCID_TYPE OF
++///     0:
++///             // individual-address invalidation
++///         PCID := INVPCID_DESC[11:0];
++///         L_ADDR := INVPCID_DESC[127:64];
++///         Invalidate mappings for L_ADDR associated with PCID except global translations;
++///         BREAK;
++///     1:
++///             // single PCID invalidation
++///         PCID := INVPCID_DESC[11:0];
++///         Invalidate all mappings associated with PCID except global translations;
++///         BREAK;
++///     2:
++///             // all PCID invalidation including global translations
++///         Invalidate all mappings for all PCIDs, including global translations;
++///         BREAK;
++///     3:
++///             // all PCID invalidation retaining global translations
++///         Invalidate all mappings for all PCIDs except global translations;
++///         BREAK;
++/// ESAC;
++enum InvpcidType {
++    /// Invalidate mappings for L_ADDR associated with PCID except global translations;
++    IndividualAddressInvalidation,
++    /// Invalidate all mappings associated with PCID except global translations;
++    SinglePcidInvalidation,
++    /// Invalidate all mappings for all PCIDs, including global translations;
++    AllPcidInvalidation,
++    /// Invalidate all mappings for all PCIDs except global translations;
++    AllPcidInvalidationRetainingGlobal,
++}
++
++/// Internal function to execute INVPCID with given parameters
++unsafe fn invpcid_internal(type_: u64, asid: u64, addr: u64) {
++    if !PCID_ENABLED.load(Ordering::Relaxed) {
++        // Fallback for systems without PCID support
++        match type_ as usize {
++            // IndividualAddressInvalidation
++            0 => {
++                asm!(
++                    "invlpg [{}]",
++                    in(reg) addr,
++                    options(nostack),
++                );
++            }
++            // SinglePcidInvalidation - flush all non-global
++            1 => super::tlb_flush_all_excluding_global(),
++            // AllPcidInvalidation - flush all including global
++            2 => super::tlb_flush_all_including_global(),
++            // AllPcidInvalidationRetainingGlobal - flush all non-global
++            3 => super::tlb_flush_all_excluding_global(),
++            _ => panic!("Invalid INVPCID type"),
++        }
++        return;
++    }
++
++    // Use INVPCID if supported
++    let descriptor = [addr, asid];
++    unsafe {
++        asm!(
++            "invpcid {0}, [{1}]",
++            in(reg) type_,
++            in(reg) &descriptor,
++            options(nostack),
++        );
++    }
++}
++
++/// Invalidate a TLB entry for a specific ASID and virtual address.
++///
++/// # Safety
++///
++/// This is a privileged instruction that must be called in kernel mode.
++pub unsafe fn invpcid_single_address(asid: u16, addr: usize) {
++    invpcid_internal(
++        InvpcidType::IndividualAddressInvalidation as u64,
++        asid as u64,
++        addr as u64,
++    );
++}
++
++/// Invalidate all TLB entries for a specific ASID.
++///
++/// # Safety
++///
++/// This is a privileged instruction that must be called in kernel mode.
++pub unsafe fn invpcid_single_context(asid: u16) {
++    invpcid_internal(InvpcidType::SinglePcidInvalidation as u64, asid as u64, 0);
++}
++
++/// Invalidate all TLB entries for all contexts.
++///
++/// # Safety
++///
++/// This is a privileged instruction that must be called in kernel mode.
++pub unsafe fn invpcid_all_excluding_global() {
++    invpcid_internal(InvpcidType::AllPcidInvalidationRetainingGlobal as u64, 0, 0);
++}
++
++/// Invalidate all TLB entries for all contexts, including global translations.
++///
++/// # Safety
++///
++/// This is a privileged instruction that must be called in kernel mode.
++pub unsafe fn invpcid_all_including_global() {
++    invpcid_internal(InvpcidType::AllPcidInvalidation as u64, 0, 0);
++}
+diff --git a/ostd/src/arch/x86/mm/mod.rs b/ostd/src/arch/x86/mm/mod.rs
+index bee800fc..c43d0ec7 100644
+--- a/ostd/src/arch/x86/mm/mod.rs
++++ b/ostd/src/arch/x86/mm/mod.rs
+@@ -7,7 +7,9 @@ use core::ops::Range;
+ 
+ use cfg_if::cfg_if;
+ pub(crate) use util::{__memcpy_fallible, __memset_fallible};
+-use x86_64::{instructions::tlb, structures::paging::PhysFrame, VirtAddr};
++use x86_64::{
++    instructions::tlb, registers::control::Cr3Flags, structures::paging::PhysFrame, VirtAddr,
++};
+ 
+ use crate::{
+     mm::{
+@@ -19,8 +21,11 @@ use crate::{
+     Pod,
+ };
+ 
++mod asid;
+ mod util;
+ 
++pub use asid::{invpcid_all_excluding_global, ASID_CAP, PCID_ENABLED};
++
+ pub(crate) const NR_ENTRIES_PER_PAGE: usize = 512;
+ 
+ #[derive(Clone, Debug, Default)]
+@@ -139,6 +144,44 @@ pub unsafe fn activate_page_table(root_paddr: Paddr, root_pt_cache: CachePolicy)
+     );
+ }
+ 
++/// Activate a page table with the specified ASID.
++///
++/// This function writes to CR3 and sets ASID (Address Space ID) bits.
++///
++/// # Safety
++///
++/// Changing the level 4 page table is unsafe, because it's possible to violate memory safety by
++/// changing the page mapping.
++pub unsafe fn activate_page_table_with_asid(
++    root_paddr: Paddr,
++    asid: u16,
++    root_pt_cache: CachePolicy,
++) {
++    if !asid::PCID_ENABLED.load(core::sync::atomic::Ordering::Relaxed) {
++        // If PCID is not supported, just use regular page table activation
++        activate_page_table(root_paddr, root_pt_cache);
++        return;
++    }
++
++    // PCID is 12 bits (0-4095)
++    let asid_bits = (asid & 0xFFF) as u64;
++
++    // Write CR3 with the PCID bits
++    x86_64::registers::control::Cr3::write(
++        PhysFrame::from_start_address(x86_64::PhysAddr::new(root_paddr as u64)).unwrap(),
++        match root_pt_cache {
++            CachePolicy::Writeback => x86_64::registers::control::Cr3Flags::empty(),
++            CachePolicy::Writethrough => {
++                x86_64::registers::control::Cr3Flags::PAGE_LEVEL_WRITETHROUGH
++            }
++            CachePolicy::Uncacheable => {
++                x86_64::registers::control::Cr3Flags::PAGE_LEVEL_CACHE_DISABLE
++            }
++            _ => panic!("unsupported cache policy for the root page table"),
++        } | Cr3Flags::from_bits_truncate(asid_bits),
++    );
++}
++
+ pub fn current_page_table_paddr() -> Paddr {
+     x86_64::registers::control::Cr3::read_raw()
+         .0
+diff --git a/ostd/src/arch/x86/mod.rs b/ostd/src/arch/x86/mod.rs
+index aadb0214..d09cc191 100644
+--- a/ostd/src/arch/x86/mod.rs
++++ b/ostd/src/arch/x86/mod.rs
+@@ -199,10 +199,25 @@ pub(crate) fn enable_cpu_features() {
+         | Cr4Flags::OSFXSR
+         | Cr4Flags::OSXMMEXCPT_ENABLE
+         | Cr4Flags::PAGE_GLOBAL;
++
++    // Check if PCID is supported by the CPU, PCID supported by ECX bit 17
++    let ecx = unsafe { core::arch::x86_64::__cpuid(1).ecx };
++    let pcid_supported = (ecx & (1 << 17)) != 0;
++
++    if pcid_supported {
++        cr4 |= Cr4Flags::PCID;
++    }
++
+     unsafe {
+         x86_64::registers::control::Cr4::write(cr4);
+     }
+ 
++    // Store PCID support status in global variable
++    mm::PCID_ENABLED.store(
++        cr4.contains(Cr4Flags::PCID),
++        core::sync::atomic::Ordering::Relaxed,
++    );
++
+     let mut xcr0 = x86_64::registers::xcontrol::XCr0::read();
+ 
+     xcr0 |= XCr0Flags::SSE;
+diff --git a/ostd/src/mm/asid_allocation.rs b/ostd/src/mm/asid_allocation.rs
+new file mode 100644
+index 00000000..df07da1f
+--- /dev/null
++++ b/ostd/src/mm/asid_allocation.rs
+@@ -0,0 +1,223 @@
++// SPDX-License-Identifier: MPL-2.0
++
++//! Address Space ID (ASID) allocation.
++//!
++//! This module provides functions to allocate and deallocate ASIDs.
++
++use core::sync::atomic::{AtomicU16, Ordering};
++
++use log;
++
++extern crate alloc;
++use alloc::collections::{btree_map::Entry, BTreeMap};
++
++/// The maximum ASID value from the architecture.
++///
++/// When we run out of ASIDs, we use this special value to indicate
++/// that the TLB entries for this address space need to be flushed
++/// using INVPCID on context switch.
++pub use crate::arch::mm::ASID_CAP;
++use crate::sync::SpinLock;
++
++/// The special ASID value that indicates the TLB entries for this
++/// address space need to be flushed on context switch.
++pub const ASID_FLUSH_REQUIRED: u16 = ASID_CAP;
++
++/// The lowest ASID value that can be allocated.
++///
++/// ASID 0 is typically reserved for the kernel.
++pub const ASID_MIN: u16 = 1;
++
++/// Global ASID allocator.
++static ASID_ALLOCATOR: SpinLock<AsidAllocator> = SpinLock::new(AsidAllocator::new());
++
++/// Global map of ASID to generation
++static ASID_MAP: SpinLock<BTreeMap<u16, u16>> = SpinLock::new(BTreeMap::new());
++
++/// Current ASID generation
++static ASID_GENERATION: AtomicU16 = AtomicU16::new(0);
++
++/// ASID allocator.
++///
++/// This structure manages the allocation and deallocation of ASIDs.
++/// ASIDs are used to avoid TLB flushes when switching between processes.
++struct AsidAllocator {
++    /// The bitmap of allocated ASIDs.
++    /// Each bit represents an ASID, where 1 means allocated and 0 means free.
++    /// ASIDs start from ASID_MIN.
++    bitmap: [u64; (ASID_CAP as usize - ASID_MIN as usize).div_ceil(64)],
++
++    /// The next ASID to try to allocate.
++    next: u16,
++}
++
++impl AsidAllocator {
++    /// Creates a new ASID allocator.
++    const fn new() -> Self {
++        Self {
++            bitmap: [0; (ASID_CAP as usize - ASID_MIN as usize).div_ceil(64)],
++            next: ASID_MIN,
++        }
++    }
++
++    /// Allocates a new ASID.
++    ///
++    /// Returns the allocated ASID, or `ASID_FLUSH_REQUIRED` if no ASIDs are available.
++    fn allocate(&mut self) -> u16 {
++        // Try to find a free ASID starting from `next`
++        let start = self.next as usize - ASID_MIN as usize;
++
++        // First search from next to end
++        for i in start / 64..self.bitmap.len() {
++            let word = self.bitmap[i];
++            if word != u64::MAX {
++                // Found a word with at least one free bit
++                let bit = word.trailing_ones() as usize;
++                if bit < 64 {
++                    let asid = ASID_MIN as usize + i * 64 + bit;
++                    if asid <= ASID_CAP as usize {
++                        self.bitmap[i] |= 1 << bit;
++                        self.next = (asid + 1) as u16;
++                        if self.next > ASID_CAP {
++                            self.next = ASID_MIN;
++                        }
++                        return asid as u16;
++                    }
++                }
++            }
++        }
++
++        // Then search from beginning to next
++        for i in 0..start / 64 {
++            let word = self.bitmap[i];
++            if word != u64::MAX {
++                // Found a word with at least one free bit
++                let bit = word.trailing_ones() as usize;
++                if bit < 64 {
++                    let asid = ASID_MIN as usize + i * 64 + bit;
++                    self.bitmap[i] |= 1 << bit;
++                    self.next = (asid + 1) as u16;
++                    return asid as u16;
++                }
++            }
++        }
++
++        // No ASIDs available
++        ASID_FLUSH_REQUIRED
++    }
++
++    /// Deallocates an ASID.
++    fn deallocate(&mut self, asid: u16) {
++        // Don't deallocate the special ASID
++        if asid == ASID_FLUSH_REQUIRED {
++            return;
++        }
++
++        assert!((ASID_MIN..ASID_CAP).contains(&asid), "ASID out of range");
++
++        let index = (asid as usize - ASID_MIN as usize) / 64;
++        let bit = (asid as usize - ASID_MIN as usize) % 64;
++
++        // Deallocate the ASID
++        self.bitmap[index] &= !(1 << bit);
++    }
++}
++
++/// Allocates a new ASID.
++///
++/// Returns the allocated ASID, or `ASID_FLUSH_REQUIRED` if no ASIDs are available.
++pub fn allocate() -> u16 {
++    let bitmap_asid = ASID_ALLOCATOR.lock().allocate();
++    if bitmap_asid != ASID_FLUSH_REQUIRED {
++        let mut asid_map = ASID_MAP.lock();
++        let generation = current_generation();
++        asid_map.insert(bitmap_asid, generation);
++        return bitmap_asid;
++    }
++
++    // If bitmap allocation failed, try BTreeMap
++    let mut asid_map = ASID_MAP.lock();
++    let generation = current_generation();
++
++    // Try to find a free ASID
++    if let Some(asid) = find_free_asid(&mut asid_map, generation) {
++        return asid;
++    }
++
++    // If no free ASID found, increment generation and reset bitmap
++    increment_generation();
++
++    // Reset bitmap allocator
++    *ASID_ALLOCATOR.lock() = AsidAllocator::new();
++
++    // Try again
++    let new_generation = current_generation();
++    let bitmap_asid = ASID_ALLOCATOR.lock().allocate();
++    if bitmap_asid != ASID_FLUSH_REQUIRED {
++        let mut asid_map = ASID_MAP.lock();
++        asid_map.insert(bitmap_asid, new_generation);
++        return bitmap_asid;
++    }
++
++    let mut asid_map = ASID_MAP.lock();
++    if let Some(asid) = find_free_asid(&mut asid_map, new_generation) {
++        return asid;
++    }
++
++    // If still no ASID available, return ASID_FLUSH_REQUIRED
++    ASID_FLUSH_REQUIRED
++}
++
++/// Finds a free ASID in the range of ASID_MIN to ASID_CAP.
++///
++/// Returns the found ASID if it is free, otherwise returns `None`.
++fn find_free_asid(
++    asid_map: &mut impl core::ops::DerefMut<Target = BTreeMap<u16, u16>>,
++    generation: u16,
++) -> Option<u16> {
++    // Search for a free ASID in the range of ASID_MIN to ASID_CAP
++    for asid in ASID_MIN..=ASID_CAP {
++        if let Entry::Vacant(e) = asid_map.entry(asid) {
++            log::debug!("[ASID] Found free ASID: {}", asid);
++            e.insert(generation);
++            return Some(asid);
++        }
++    }
++    None
++}
++
++/// Deallocates an ASID.
++pub fn deallocate(asid: u16) {
++    if asid == ASID_FLUSH_REQUIRED {
++        return;
++    }
++
++    let mut asid_map = ASID_MAP.lock();
++
++    // Remove from map first
++    asid_map.remove(&asid);
++
++    // Only deallocate from bitmap if it's in the valid range for the bitmap
++    if (ASID_MIN..ASID_CAP).contains(&asid) {
++        ASID_ALLOCATOR.lock().deallocate(asid);
++    }
++}
++
++/// Gets the current ASID generation.
++pub fn current_generation() -> u16 {
++    ASID_GENERATION.load(Ordering::Relaxed)
++}
++
++/// Increments the ASID generation.
++///
++/// This is called when we run out of ASIDs and need to flush all TLBs.
++pub fn increment_generation() {
++    let next_generation = ASID_GENERATION.load(Ordering::Acquire).wrapping_add(1);
++
++    // Clear the ASID map
++    let mut asid_map = ASID_MAP.lock();
++    asid_map.clear();
++
++    // Update the generation
++    ASID_GENERATION.store(next_generation, Ordering::Release);
++}
+diff --git a/ostd/src/mm/mod.rs b/ostd/src/mm/mod.rs
+index fa58c042..bd9560d4 100644
+--- a/ostd/src/mm/mod.rs
++++ b/ostd/src/mm/mod.rs
+@@ -8,6 +8,7 @@ pub type Vaddr = usize;
+ /// Physical addresses.
+ pub type Paddr = usize;
+ 
++pub mod asid_allocation;
+ pub(crate) mod dma;
+ pub mod frame;
+ pub mod heap;
+diff --git a/ostd/src/mm/page_table/mod.rs b/ostd/src/mm/page_table/mod.rs
+index af942edb..9aee5c7c 100644
+--- a/ostd/src/mm/page_table/mod.rs
++++ b/ostd/src/mm/page_table/mod.rs
+@@ -90,11 +90,36 @@ pub struct PageTable<
+ }
+ 
+ impl PageTable<UserMode> {
+-    pub fn activate(&self) {
+-        // SAFETY: The usermode page table is safe to activate since the kernel
+-        // mappings are shared.
++    // pub fn activate(&self) {
++    //     // SAFETY: The usermode page table is safe to activate since the kernel
++    //     // mappings are shared.
++    //     unsafe {
++    //         self.root.activate();
++    //     }
++    // }
++
++    /// Activates the page table with the specified ASID.
++    ///
++    /// # Safety
++    ///
++    /// The user-mode page table is safe to activate since the kernel mappings are shared.
++    pub fn activate_with_asid(&self, asid: u16) {
++        // If ASID is ASID_FLUSH_REQUIRED, use 0 as actual ASID
++        let actual_asid = if asid == crate::mm::asid_allocation::ASID_FLUSH_REQUIRED {
++            0
++        } else {
++            asid
++        };
++
++        let root_pt_cache = crate::mm::CachePolicy::Writeback;
++
++        // Safety: We ensure this is a valid page table root address and ASID
+         unsafe {
+-            self.root.activate();
++            crate::arch::mm::activate_page_table_with_asid(
++                self.root.paddr(),
++                actual_asid,
++                root_pt_cache,
++            );
+         }
+     }
+ 
+diff --git a/ostd/src/mm/page_table/node/mod.rs b/ostd/src/mm/page_table/node/mod.rs
+index ead126e4..ae974d4d 100644
+--- a/ostd/src/mm/page_table/node/mod.rs
++++ b/ostd/src/mm/page_table/node/mod.rs
+@@ -102,49 +102,6 @@ impl<E: PageTableEntryTrait, C: PagingConstsTrait> RawPageTableNode<E, C> {
+         }
+     }
+ 
+-    /// Activates the page table assuming it is a root page table.
+-    ///
+-    /// Here we ensure not dropping an active page table by making a
+-    /// processor a page table owner. When activating a page table, the
+-    /// reference count of the last activated page table is decremented.
+-    /// And that of the current page table is incremented.
+-    ///
+-    /// # Safety
+-    ///
+-    /// The caller must ensure that the page table to be activated has
+-    /// proper mappings for the kernel and has the correct const parameters
+-    /// matching the current CPU.
+-    ///
+-    /// # Panics
+-    ///
+-    /// Only top-level page tables can be activated using this function.
+-    pub(crate) unsafe fn activate(&self) {
+-        use crate::{
+-            arch::mm::{activate_page_table, current_page_table_paddr},
+-            mm::CachePolicy,
+-        };
+-
+-        assert_eq!(self.level, C::NR_LEVELS);
+-
+-        let last_activated_paddr = current_page_table_paddr();
+-
+-        if last_activated_paddr == self.raw {
+-            return;
+-        }
+-
+-        activate_page_table(self.raw, CachePolicy::Writeback);
+-
+-        // Increment the reference count of the current page table.
+-        self.inc_ref_count();
+-
+-        // Restore and drop the last activated page table.
+-        drop(Self {
+-            raw: last_activated_paddr,
+-            level: C::NR_LEVELS,
+-            _phantom: PhantomData,
+-        });
+-    }
+-
+     /// Activates the (root) page table assuming it is the first activation.
+     ///
+     /// It will not try dropping the last activate page table. It is the same
+diff --git a/ostd/src/mm/vm_space.rs b/ostd/src/mm/vm_space.rs
+index 16f81dfd..3361d9df 100644
+--- a/ostd/src/mm/vm_space.rs
++++ b/ostd/src/mm/vm_space.rs
+@@ -13,11 +13,13 @@ use core::{ops::Range, sync::atomic::Ordering};
+ 
+ use crate::{
+     arch::mm::{
+-        current_page_table_paddr, tlb_flush_all_excluding_global, PageTableEntry, PagingConsts,
++        current_page_table_paddr, invpcid_all_excluding_global, tlb_flush_all_excluding_global,
++        PageTableEntry, PagingConsts,
+     },
+     cpu::{AtomicCpuSet, CpuSet, PinCurrentCpu},
+     cpu_local_cell,
+     mm::{
++        asid_allocation::{self, ASID_FLUSH_REQUIRED},
+         io::Fallible,
+         kspace::KERNEL_PAGE_TABLE,
+         page_table::{self, PageTable, PageTableItem, UserMode},
+@@ -72,6 +74,9 @@ pub struct VmSpace {
+     /// Cursors hold read locks and activation require a write lock.
+     activation_lock: RwLock<()>,
+     cpus: AtomicCpuSet,
++    /// ASID
++    asid: u16,
++    asid_generation: u16,
+ }
+ 
+ impl VmSpace {
+@@ -81,9 +86,21 @@ impl VmSpace {
+             pt: KERNEL_PAGE_TABLE.get().unwrap().create_user_page_table(),
+             activation_lock: RwLock::new(()),
+             cpus: AtomicCpuSet::new(CpuSet::new_empty()),
++            asid: asid_allocation::allocate(),
++            asid_generation: asid_allocation::current_generation(),
+         }
+     }
+ 
++    /// Returns the ASID of this VM space.
++    pub fn asid(&self) -> u16 {
++        self.asid
++    }
++
++    /// Returns the ASID generation of this VM space.
++    pub fn asid_generation(&self) -> u16 {
++        self.asid_generation
++    }
++
+     /// Clears the user space mappings in the page table.
+     ///
+     /// This method returns error if the page table is activated on any other
+@@ -162,6 +179,16 @@ impl VmSpace {
+         // we add the CPU to the CPU set.
+         let _activation_lock = self.activation_lock.write();
+ 
++        let current_generation = asid_allocation::current_generation();
++        let need_flush =
++            self.asid == ASID_FLUSH_REQUIRED || self.asid_generation != current_generation;
++
++        if need_flush {
++            unsafe {
++                invpcid_all_excluding_global();
++            }
++        }
++
+         // Record ourselves in the CPU set and the activated VM space pointer.
+         self.cpus.add(cpu, Ordering::Relaxed);
+         let self_ptr = Arc::into_raw(Arc::clone(self)) as *mut VmSpace;
+@@ -174,7 +201,7 @@ impl VmSpace {
+             last.cpus.remove(cpu, Ordering::Relaxed);
+         }
+ 
+-        self.pt.activate();
++        self.pt.activate_with_asid(self.asid);
+     }
+ 
+     /// Creates a reader to read data from the user space of the current task.
+@@ -222,6 +249,16 @@ impl VmSpace {
+     }
+ }
+ 
++impl Drop for VmSpace {
++    fn drop(&mut self) {
++        // Ensure the VmSpace is not activated on any CPU
++        // let cpus = self.cpus.load();
++        // assert!(cpus.is_empty(), "attempt to drop an activated VmSpace");
++
++        asid_allocation::deallocate(self.asid);
++    }
++}
++
+ impl Default for VmSpace {
+     fn default() -> Self {
+         Self::new()
