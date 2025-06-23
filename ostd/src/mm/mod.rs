@@ -9,6 +9,7 @@ pub type Vaddr = usize;
 pub type Paddr = usize;
 
 pub mod asid_allocation;
+pub mod asid_profiling;
 pub(crate) mod dma;
 pub mod frame;
 pub mod heap;

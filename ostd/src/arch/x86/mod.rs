@@ -213,10 +213,14 @@ pub(crate) fn enable_cpu_features() {
     }
 
     // Store PCID support status in global variable
+    let pcid_enabled = cr4.contains(Cr4Flags::PCID);
     mm::PCID_ENABLED.store(
-        cr4.contains(Cr4Flags::PCID),
+        pcid_enabled,
         core::sync::atomic::Ordering::Relaxed,
     );
+    
+    // Record PCID status in profiling
+    crate::mm::asid_profiling::ASID_STATS.set_pcid_enabled(pcid_enabled);
 
     let mut xcr0 = x86_64::registers::xcontrol::XCr0::read();
 
