@@ -7,6 +7,8 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use crate::{profile_asid_operation, mm::asid_profiling::{ASID_STATS, TlbOperationType}};
+
 /// Global flag indicating if PCID is enabled
 pub static PCID_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -94,10 +96,18 @@ unsafe fn invpcid_internal(type_: u64, asid: u64, addr: u64) {
 ///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_single_address(asid: u16, addr: usize) {
-    invpcid_internal(
-        InvpcidType::IndividualAddressInvalidation as u64,
-        asid as u64,
-        addr as u64,
+    let (_, time_cycles) = profile_asid_operation!({
+        invpcid_internal(
+            InvpcidType::IndividualAddressInvalidation as u64,
+            asid as u64,
+            addr as u64,
+        );
+    });
+    
+    ASID_STATS.record_tlb_operation(
+        TlbOperationType::SingleAddress, 
+        Some(asid), 
+        time_cycles
     );
 }
 
@@ -107,7 +117,15 @@ pub unsafe fn invpcid_single_address(asid: u16, addr: usize) {
 ///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_single_context(asid: u16) {
-    invpcid_internal(InvpcidType::SinglePcidInvalidation as u64, asid as u64, 0);
+    let (_, time_cycles) = profile_asid_operation!({
+        invpcid_internal(InvpcidType::SinglePcidInvalidation as u64, asid as u64, 0);
+    });
+    
+    ASID_STATS.record_tlb_operation(
+        TlbOperationType::SingleContext, 
+        Some(asid), 
+        time_cycles
+    );
 }
 
 /// Invalidate all TLB entries for all contexts.
@@ -116,7 +134,15 @@ pub unsafe fn invpcid_single_context(asid: u16) {
 ///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_all_excluding_global() {
-    invpcid_internal(InvpcidType::AllPcidInvalidationRetainingGlobal as u64, 0, 0);
+    let (_, time_cycles) = profile_asid_operation!({
+        invpcid_internal(InvpcidType::AllPcidInvalidationRetainingGlobal as u64, 0, 0);
+    });
+    
+    ASID_STATS.record_tlb_operation(
+        TlbOperationType::AllContexts, 
+        None, 
+        time_cycles
+    );
 }
 
 /// Invalidate all TLB entries for all contexts, including global translations.
@@ -125,5 +151,13 @@ pub unsafe fn invpcid_all_excluding_global() {
 ///
 /// This is a privileged instruction that must be called in kernel mode.
 pub unsafe fn invpcid_all_including_global() {
-    invpcid_internal(InvpcidType::AllPcidInvalidation as u64, 0, 0);
+    let (_, time_cycles) = profile_asid_operation!({
+        invpcid_internal(InvpcidType::AllPcidInvalidation as u64, 0, 0);
+    });
+    
+    ASID_STATS.record_tlb_operation(
+        TlbOperationType::FullFlush, 
+        None, 
+        time_cycles
+    );
 }

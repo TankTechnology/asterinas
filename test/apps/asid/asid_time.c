@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-// This program measures the time it takes for 8 threads to randomly access 2MB of memory each.
+// This program measures the time it takes for 16 threads to randomly access 4MB of memory each.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,8 +12,8 @@
 #include <sys/mman.h>
 #include <stdint.h>
 
-#define NUM_THREADS 8
-#define MEMORY_SIZE (2 * 1024 * 1024)  // 2MB per thread
+#define NUM_THREADS 32
+#define MEMORY_SIZE (4 * 1024 * 1024) 
 #define NUM_ACCESSES 100000  // Number of random accesses per thread
 #define WARMUP_ACCESSES 1000  // Warmup accesses to avoid cold cache effects
 

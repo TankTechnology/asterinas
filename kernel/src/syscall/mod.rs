@@ -13,6 +13,7 @@ mod access;
 mod alarm;
 mod arch;
 mod arch_prctl;
+mod asid_profiling;
 mod bind;
 mod brk;
 mod capget;

@@ -5,6 +5,7 @@ use crate::syscall::{
     access::{sys_access, sys_faccessat, sys_faccessat2},
     alarm::sys_alarm,
     arch_prctl::sys_arch_prctl,
+    asid_profiling::sys_asid_profiling,
     bind::sys_bind,
     brk::sys_brk,
     capget::sys_capget,
@@ -369,4 +370,5 @@ impl_syscall_nums_and_dispatch_fn! {
     SYS_STATX = 332            => sys_statx(args[..5]);
     SYS_CLONE3 = 435           => sys_clone3(args[..2], &user_ctx);
     SYS_FACCESSAT2 = 439       => sys_faccessat2(args[..4]);
+    SYS_ASID_PROFILING = 999   => sys_asid_profiling(args[..3]);
 }

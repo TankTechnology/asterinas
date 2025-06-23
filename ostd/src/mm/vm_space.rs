@@ -12,6 +12,7 @@
 use core::{ops::Range, sync::atomic::Ordering};
 
 use crate::{
+    profile_asid_operation,
     arch::mm::{
         current_page_table_paddr, invpcid_all_excluding_global, tlb_flush_all_excluding_global,
         PageTableEntry, PagingConsts,
@@ -20,6 +21,7 @@ use crate::{
     cpu_local_cell,
     mm::{
         asid_allocation::{self, ASID_FLUSH_REQUIRED},
+        asid_profiling::ASID_STATS,
         io::Fallible,
         kspace::KERNEL_PAGE_TABLE,
         page_table::{self, PageTable, PageTableItem, UserMode},
@@ -175,33 +177,41 @@ impl VmSpace {
             return;
         }
 
-        // Ensure no mutable cursors (which holds read locks) are alive before
-        // we add the CPU to the CPU set.
-        let _activation_lock = self.activation_lock.write();
+        let (need_flush, time_cycles) = profile_asid_operation!({
+            // Ensure no mutable cursors (which holds read locks) are alive before
+            // we add the CPU to the CPU set.
+            let _activation_lock = self.activation_lock.write();
 
-        let current_generation = asid_allocation::current_generation();
-        let need_flush =
-            self.asid == ASID_FLUSH_REQUIRED || self.asid_generation != current_generation;
+            let current_generation = asid_allocation::current_generation();
+            let need_flush =
+                self.asid == ASID_FLUSH_REQUIRED || self.asid_generation != current_generation;
 
-        if need_flush {
-            unsafe {
-                invpcid_all_excluding_global();
+            if need_flush {
+                unsafe {
+                    invpcid_all_excluding_global();
+                }
             }
-        }
 
-        // Record ourselves in the CPU set and the activated VM space pointer.
-        self.cpus.add(cpu, Ordering::Relaxed);
-        let self_ptr = Arc::into_raw(Arc::clone(self)) as *mut VmSpace;
-        ACTIVATED_VM_SPACE.store(self_ptr);
+            // Record ourselves in the CPU set and the activated VM space pointer.
+            self.cpus.add(cpu, Ordering::Relaxed);
+            let self_ptr = Arc::into_raw(Arc::clone(self)) as *mut VmSpace;
+            ACTIVATED_VM_SPACE.store(self_ptr);
 
-        if !last_ptr.is_null() {
-            // SAFETY: The pointer is cast from an `Arc` when it's activated
-            // the last time, so it can be restored and only restored once.
-            let last = unsafe { Arc::from_raw(last_ptr) };
-            last.cpus.remove(cpu, Ordering::Relaxed);
-        }
+            if !last_ptr.is_null() {
+                // SAFETY: The pointer is cast from an `Arc` when it's activated
+                // the last time, so it can be restored and only restored once.
+                let last = unsafe { Arc::from_raw(last_ptr) };
+                last.cpus.remove(cpu, Ordering::Relaxed);
+            }
 
-        self.pt.activate_with_asid(self.asid);
+            self.pt.activate_with_asid(self.asid);
+            
+            need_flush
+        });
+        
+        // Record the context switch with profiling
+        ASID_STATS.record_context_switch(self.asid, need_flush, time_cycles);
+        ASID_STATS.record_vmspace_activation();
     }
 
     /// Creates a reader to read data from the user space of the current task.
