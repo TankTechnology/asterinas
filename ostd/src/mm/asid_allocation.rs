@@ -4,12 +4,11 @@
 //!
 //! This module provides functions to allocate and deallocate ASIDs.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+
 
 use log;
 
 extern crate alloc;
-use alloc::collections::{btree_map::Entry, BTreeMap};
 
 use crate::{profile_asid_operation, mm::asid_profiling::ASID_STATS};
 
@@ -30,20 +29,14 @@ pub const ASID_FLUSH_REQUIRED: u16 = ASID_CAP;
 /// ASID 0 is typically reserved for the kernel.
 pub const ASID_MIN: u16 = 1;
 
-/// Global ASID allocator.
-static ASID_ALLOCATOR: SpinLock<AsidAllocator> = SpinLock::new(AsidAllocator::new());
+/// Global ASID manager.
+static ASID_MANAGER: SpinLock<AsidManager> = SpinLock::new(AsidManager::new());
 
-/// Global map of ASID to generation
-static ASID_MAP: SpinLock<BTreeMap<u16, u16>> = SpinLock::new(BTreeMap::new());
-
-/// Current ASID generation
-static ASID_GENERATION: AtomicU16 = AtomicU16::new(0);
-
-/// ASID allocator.
+/// ASID manager.
 ///
 /// This structure manages the allocation and deallocation of ASIDs.
 /// ASIDs are used to avoid TLB flushes when switching between processes.
-struct AsidAllocator {
+struct AsidManager {
     /// The bitmap of allocated ASIDs.
     /// Each bit represents an ASID, where 1 means allocated and 0 means free.
     /// ASIDs start from ASID_MIN.
@@ -51,21 +44,25 @@ struct AsidAllocator {
 
     /// The next ASID to try to allocate.
     next: u16,
+
+    /// Current ASID generation.
+    current_generation: u16,
 }
 
-impl AsidAllocator {
-    /// Creates a new ASID allocator.
+impl AsidManager {
+    /// Creates a new ASID manager.
     const fn new() -> Self {
         Self {
             bitmap: [0; (ASID_CAP as usize - ASID_MIN as usize).div_ceil(64)],
             next: ASID_MIN,
+            current_generation: 0,
         }
     }
 
-    /// Allocates a new ASID.
+    /// Finds and sets a free bit in the bitmap.
     ///
-    /// Returns the allocated ASID, or `ASID_FLUSH_REQUIRED` if no ASIDs are available.
-    fn allocate(&mut self) -> u16 {
+    /// Returns the allocated ASID if successful, or `None` if no free ASIDs are available.
+    fn find_and_set_free_bit(&mut self) -> Option<u16> {
         ASID_STATS.record_bitmap_search();
         
         // Try to find a free ASID starting from `next`
@@ -76,7 +73,7 @@ impl AsidAllocator {
             let word = self.bitmap[i];
             if word != u64::MAX {
                 // Found a word with at least one free bit
-                let bit = word.trailing_ones() as usize;
+                let bit = word.trailing_zeros() as usize;
                 if bit < 64 {
                     let asid = ASID_MIN as usize + i * 64 + bit;
                     if asid <= ASID_CAP as usize {
@@ -85,7 +82,7 @@ impl AsidAllocator {
                         if self.next > ASID_CAP {
                             self.next = ASID_MIN;
                         }
-                        return asid as u16;
+                        return Some(asid as u16);
                     }
                 }
             }
@@ -96,18 +93,41 @@ impl AsidAllocator {
             let word = self.bitmap[i];
             if word != u64::MAX {
                 // Found a word with at least one free bit
-                let bit = word.trailing_ones() as usize;
+                let bit = word.trailing_zeros() as usize;
                 if bit < 64 {
                     let asid = ASID_MIN as usize + i * 64 + bit;
                     self.bitmap[i] |= 1 << bit;
                     self.next = (asid + 1) as u16;
-                    return asid as u16;
+                    return Some(asid as u16);
                 }
             }
         }
 
         // No ASIDs available
-        ASID_FLUSH_REQUIRED
+        None
+    }
+
+    /// Allocates a new ASID.
+    ///
+    /// Returns the allocated ASID, or `ASID_FLUSH_REQUIRED` if no ASIDs are available.
+    fn allocate(&mut self) -> u16 {
+        // Try to find a free ASID
+        if let Some(asid) = self.find_and_set_free_bit() {
+            return asid;
+        }
+
+        // No ASIDs available - perform generation rollover and try again
+        self.increment_generation();
+        
+        // After rollover, try allocation again
+        // This should always succeed since we just reset the bitmap
+        if let Some(asid) = self.find_and_set_free_bit() {
+            asid
+        } else {
+            // If we still can't allocate after rollover, this indicates a serious problem
+            // (e.g., ASID_CAP is 0 or invalid range)
+            ASID_FLUSH_REQUIRED
+        }
     }
 
     /// Deallocates an ASID.
@@ -125,6 +145,20 @@ impl AsidAllocator {
         // Deallocate the ASID
         self.bitmap[index] &= !(1 << bit);
     }
+
+    /// Increments the ASID generation and resets the bitmap.
+    ///
+    /// This is called when we run out of ASIDs and need to flush all TLBs.
+    fn increment_generation(&mut self) {
+        self.current_generation = self.current_generation.wrapping_add(1);
+        
+        // Reset the bitmap allocator
+        self.bitmap = [0; (ASID_CAP as usize - ASID_MIN as usize).div_ceil(64)];
+        self.next = ASID_MIN;
+        
+        // Record the generation rollover
+        ASID_STATS.record_generation_rollover(self.current_generation);
+    }
 }
 
 /// Allocates a new ASID.
@@ -132,45 +166,7 @@ impl AsidAllocator {
 /// Returns the allocated ASID, or `ASID_FLUSH_REQUIRED` if no ASIDs are available.
 pub fn allocate() -> u16 {
     let (result, time_cycles) = profile_asid_operation!({
-        let bitmap_asid = ASID_ALLOCATOR.lock().allocate();
-        if bitmap_asid != ASID_FLUSH_REQUIRED {
-            let mut asid_map = ASID_MAP.lock();
-            let generation = current_generation();
-            asid_map.insert(bitmap_asid, generation);
-            bitmap_asid
-        } else {
-            // If bitmap allocation failed, try BTreeMap
-            let mut asid_map = ASID_MAP.lock();
-            let generation = current_generation();
-
-            // Try to find a free ASID
-            if let Some(asid) = find_free_asid(&mut asid_map, generation) {
-                asid
-            } else {
-                // If no free ASID found, increment generation and reset bitmap
-                increment_generation();
-
-                // Reset bitmap allocator
-                *ASID_ALLOCATOR.lock() = AsidAllocator::new();
-
-                // Try again
-                let new_generation = current_generation();
-                let bitmap_asid = ASID_ALLOCATOR.lock().allocate();
-                if bitmap_asid != ASID_FLUSH_REQUIRED {
-                    let mut asid_map = ASID_MAP.lock();
-                    asid_map.insert(bitmap_asid, new_generation);
-                    bitmap_asid
-                } else {
-                    let mut asid_map = ASID_MAP.lock();
-                    if let Some(asid) = find_free_asid(&mut asid_map, new_generation) {
-                        asid
-                    } else {
-                        // If still no ASID available, return ASID_FLUSH_REQUIRED
-                        ASID_FLUSH_REQUIRED
-                    }
-                }
-            }
-        }
+        ASID_MANAGER.lock().allocate()
     });
     
     if result == ASID_FLUSH_REQUIRED {
@@ -182,26 +178,7 @@ pub fn allocate() -> u16 {
     result
 }
 
-/// Finds a free ASID in the range of ASID_MIN to ASID_CAP.
-///
-/// Returns the found ASID if it is free, otherwise returns `None`.
-fn find_free_asid(
-    asid_map: &mut impl core::ops::DerefMut<Target = BTreeMap<u16, u16>>,
-    generation: u16,
-) -> Option<u16> {
-    ASID_STATS.record_map_search();
-    
-    // Search for a free ASID in the range of ASID_MIN to ASID_CAP
-    for asid in ASID_MIN..=ASID_CAP {
-        if let Entry::Vacant(e) = asid_map.entry(asid) {
-            log::debug!("[ASID] Found free ASID: {}", asid);
-            e.insert(generation);
-            ASID_STATS.record_asid_reuse(asid);
-            return Some(asid);
-        }
-    }
-    None
-}
+
 
 /// Deallocates an ASID.
 pub fn deallocate(asid: u16) {
@@ -210,14 +187,9 @@ pub fn deallocate(asid: u16) {
     }
 
     let (_, time_cycles) = profile_asid_operation!({
-        let mut asid_map = ASID_MAP.lock();
-
-        // Remove from map first
-        asid_map.remove(&asid);
-
         // Only deallocate from bitmap if it's in the valid range for the bitmap
         if (ASID_MIN..ASID_CAP).contains(&asid) {
-            ASID_ALLOCATOR.lock().deallocate(asid);
+            ASID_MANAGER.lock().deallocate(asid);
         }
     });
     
@@ -226,22 +198,12 @@ pub fn deallocate(asid: u16) {
 
 /// Gets the current ASID generation.
 pub fn current_generation() -> u16 {
-    ASID_GENERATION.load(Ordering::Relaxed)
+    ASID_MANAGER.lock().current_generation
 }
 
 /// Increments the ASID generation.
 ///
 /// This is called when we run out of ASIDs and need to flush all TLBs.
 pub fn increment_generation() {
-    let next_generation = ASID_GENERATION.load(Ordering::Acquire).wrapping_add(1);
-
-    // Clear the ASID map
-    let mut asid_map = ASID_MAP.lock();
-    asid_map.clear();
-
-    // Update the generation
-    ASID_GENERATION.store(next_generation, Ordering::Release);
-    
-    // Record the generation rollover
-    ASID_STATS.record_generation_rollover(next_generation);
+    ASID_MANAGER.lock().increment_generation();
 }
