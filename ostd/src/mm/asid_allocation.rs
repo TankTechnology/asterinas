@@ -12,6 +12,8 @@ extern crate alloc;
 
 use crate::{profile_asid_operation, mm::asid_profiling::ASID_STATS};
 
+use crate::{profile_asid_operation, mm::asid_profiling::ASID_STATS};
+
 /// The maximum ASID value from the architecture.
 ///
 /// When we run out of ASIDs, we use this special value to indicate
@@ -177,7 +179,6 @@ pub fn allocate() -> u16 {
     
     result
 }
-
 
 
 /// Deallocates an ASID.
