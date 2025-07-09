@@ -22,7 +22,7 @@ use crate::sync::SpinLock;
 
 /// The special ASID value that indicates the TLB entries for this
 /// address space need to be flushed on context switch.
-pub const ASID_FLUSH_REQUIRED: u16 = ASID_CAP;
+pub const ASID_FLUSH_REQUIRED: u16 = ASID_CAP + 1;
 
 /// The lowest ASID value that can be allocated.
 ///

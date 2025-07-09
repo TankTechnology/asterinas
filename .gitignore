@@ -32,3 +32,6 @@ aster-nix-profile-*.svg
 
 # Cursor
 .cursor/
+
+# 
+changes.diff

@@ -9,7 +9,7 @@
 //! powerful concurrent accesses to the page table, and suffers from the same
 //! validity concerns as described in [`super::page_table::cursor`].
 
-use core::{ops::Range, sync::atomic::Ordering};
+use core::{ops::Range, sync::atomic::{AtomicU16, Ordering}};
 
 use crate::{
     profile_asid_operation,
@@ -77,8 +77,8 @@ pub struct VmSpace {
     activation_lock: RwLock<()>,
     cpus: AtomicCpuSet,
     /// ASID
-    asid: u16,
-    asid_generation: u16,
+    asid: AtomicU16,
+    asid_generation: AtomicU16,
 }
 
 impl VmSpace {
@@ -88,19 +88,19 @@ impl VmSpace {
             pt: KERNEL_PAGE_TABLE.get().unwrap().create_user_page_table(),
             activation_lock: RwLock::new(()),
             cpus: AtomicCpuSet::new(CpuSet::new_empty()),
-            asid: asid_allocation::allocate(),
-            asid_generation: asid_allocation::current_generation(),
+            asid: AtomicU16::new(asid_allocation::allocate()),
+            asid_generation: AtomicU16::new(asid_allocation::current_generation()),
         }
     }
 
     /// Returns the ASID of this VM space.
     pub fn asid(&self) -> u16 {
-        self.asid
+        self.asid.load(Ordering::Relaxed)
     }
 
     /// Returns the ASID generation of this VM space.
     pub fn asid_generation(&self) -> u16 {
-        self.asid_generation
+        self.asid_generation.load(Ordering::Relaxed)
     }
 
     /// Clears the user space mappings in the page table.
@@ -183,14 +183,21 @@ impl VmSpace {
             let _activation_lock = self.activation_lock.write();
 
             let current_generation = asid_allocation::current_generation();
-            let need_flush =
-                self.asid == ASID_FLUSH_REQUIRED || self.asid_generation != current_generation;
+            let current_asid = self.asid.load(Ordering::Relaxed);
+            let current_asid_generation = self.asid_generation.load(Ordering::Relaxed);
+            
+            let need_flush = current_asid == ASID_FLUSH_REQUIRED || current_asid_generation != current_generation;
 
-            if need_flush {
-                unsafe {
-                    invpcid_all_excluding_global();
-                }
-            }
+            let actual_asid = if need_flush {
+                unsafe { invpcid_all_excluding_global(); }
+                let new_asid = asid_allocation::allocate();
+                let new_generation = asid_allocation::current_generation();
+                self.asid.store(new_asid, Ordering::Relaxed);
+                self.asid_generation.store(new_generation, Ordering::Relaxed);
+                new_asid
+            } else {
+                current_asid
+            };
 
             // Record ourselves in the CPU set and the activated VM space pointer.
             self.cpus.add(cpu, Ordering::Relaxed);
@@ -204,13 +211,13 @@ impl VmSpace {
                 last.cpus.remove(cpu, Ordering::Relaxed);
             }
 
-            self.pt.activate_with_asid(self.asid);
+            self.pt.activate_with_asid(actual_asid);
             
             need_flush
         });
         
         // Record the context switch with profiling
-        ASID_STATS.record_context_switch(self.asid, need_flush, time_cycles);
+        ASID_STATS.record_context_switch(self.asid.load(Ordering::Relaxed), need_flush, time_cycles);
         ASID_STATS.record_vmspace_activation();
     }
 
@@ -265,7 +272,7 @@ impl Drop for VmSpace {
         // let cpus = self.cpus.load();
         // assert!(cpus.is_empty(), "attempt to drop an activated VmSpace");
 
-        asid_allocation::deallocate(self.asid);
+        asid_allocation::deallocate(self.asid.load(Ordering::Relaxed));
     }
 }
 

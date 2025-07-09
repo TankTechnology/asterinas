@@ -11,6 +11,7 @@ The ASID (Address Space ID) system in Asterinas OS provides hardware-assisted ad
 - Analyze context switch efficiency
 - Measure the effectiveness of ASID reuse strategies
 - Identify performance bottlenecks in memory management
+- Test correctness of the new unified ASID manager implementation
 
 ## Components
 
@@ -23,7 +24,93 @@ The core profiling module that tracks:
 - **Search Operations**: Bitmap and map search efficiency
 - **Per-ASID Metrics**: Individual ASID usage patterns
 
-### 2. Test Applications
+### 2. New Test Applications for ASID Implementation Validation
+
+#### `asid_correctness_test.c` - Comprehensive Correctness Testing
+**NEW** - Tests the correctness of the new unified ASID manager implementation.
+
+**Features:**
+- Basic ASID allocation/deallocation functionality testing
+- Concurrent access from multiple threads and processes
+- Multi-process ASID operations validation
+- Generation rollover behavior verification
+- Edge cases and error condition handling
+- Memory integrity checks under ASID stress
+- Comprehensive test result reporting with pass/fail indicators
+
+**Usage:**
+```bash
+cd /test && ./asid_correctness_test
+```
+
+**What it tests:**
+- ✅ Basic ASID functionality works correctly
+- ✅ Concurrent threads can safely access memory without corruption
+- ✅ Multi-process workloads maintain memory integrity
+- ✅ Generation rollover doesn't break system functionality
+- ✅ Edge cases like rapid allocation/deallocation cycles
+
+#### `asid_efficiency_monitor.c` - Performance Test with Detailed Monitoring
+**NEW** - Measures efficiency improvements while recording detailed metrics.
+
+**Features:**
+- Comprehensive TLB flush counting and analysis
+- Context switch efficiency measurement
+- ASID allocation/deallocation pattern tracking
+- Generation rollover impact analysis
+- Real-time monitoring during test execution
+- Detailed performance metrics and timeline data
+- Multiple test configurations (light, medium, heavy load)
+
+**Usage:**
+```bash
+# Run default medium load test
+cd /test && ./asid_efficiency_monitor
+
+# Run specific test configuration
+cd /test && ./asid_efficiency_monitor 1  # Light load
+cd /test && ./asid_efficiency_monitor 2  # Medium load  
+cd /test && ./asid_efficiency_monitor 3  # Heavy load
+```
+
+**What it measures:**
+- 📊 TLB flush operations (single address, single context, all context, full)
+- 📊 Context switch rates and flush requirements
+- 📊 ASID allocation success rates and patterns
+- 📊 Generation rollover frequency and impact
+- 📊 Memory bandwidth and operation throughput
+- 📊 Timeline data for performance graphing
+
+#### `asid_efficiency_clean.c` - Clean Performance Measurement
+**NEW** - Pure performance testing without monitoring overhead.
+
+**Features:**
+- Minimal overhead for baseline performance measurement
+- Multiple test configurations for comparison
+- Memory access latency micro-benchmarks
+- Pure throughput and bandwidth measurement
+- Clean baseline for comparison with monitored tests
+
+**Usage:**
+```bash
+# Run default performance test
+cd /test && ./asid_efficiency_clean
+
+# Run comparison suite with multiple configurations
+cd /test && ./asid_efficiency_clean compare
+
+# Run memory access latency tests
+cd /test && ./asid_efficiency_clean latency
+```
+
+**What it measures:**
+- ⚡ Raw memory operation throughput
+- ⚡ Memory access latency patterns
+- ⚡ Context switch performance impact
+- ⚡ Multi-process scaling efficiency
+- ⚡ Pure performance without monitoring cost
+
+### 3. Existing Test Applications
 
 #### `asid_test.c` - Basic Functionality Test
 Tests the correctness of the ASID mechanism by creating multiple threads that perform memory operations and verify data integrity.
@@ -96,7 +183,7 @@ cd /test && ./asid_profiler --log
 cd /test && ./asid_profiler --reset
 ```
 
-### 3. Kernel Integration
+### 4. Kernel Integration
 
 #### ASID Allocation Module (`ostd/src/mm/asid_allocation.rs`)
 Enhanced with profiling calls to track:
@@ -123,6 +210,53 @@ Provides userspace access to profiling data:
 - Efficiency metrics calculation
 - Report generation
 - Counter reset functionality
+
+## Testing the New ASID Implementation
+
+### Recommended Testing Workflow
+
+1. **Correctness First**: Verify the implementation works correctly
+   ```bash
+   cd /test && ./asid_correctness_test
+   ```
+
+2. **Performance with Monitoring**: Measure detailed performance metrics
+   ```bash
+   cd /test && ./asid_efficiency_monitor 2  # Medium load test
+   ```
+
+3. **Clean Performance**: Get baseline performance numbers
+   ```bash
+   cd /test && ./asid_efficiency_clean
+   ```
+
+4. **Compare Results**: Analyze the difference between monitored and clean tests to understand monitoring overhead
+
+### Expected Results
+
+**Correctness Test:**
+- All tests should pass (✅ status indicators)
+- No memory corruption detected
+- System should handle concurrent access correctly
+- Generation rollover should work seamlessly
+
+**Efficiency Tests:**
+- Lower TLB flush rates compared to old implementation
+- Higher context switch efficiency (lower flush percentage)
+- Improved memory access performance
+- Better ASID reuse patterns
+
+### Performance Comparison
+
+To compare the new implementation with the old one:
+
+1. **Before applying changes**: Run efficiency tests and save results
+2. **After applying changes**: Run the same tests
+3. **Compare metrics**:
+   - TLB flush frequency (should decrease)
+   - Context switch flush percentage (should decrease) 
+   - Memory operation throughput (should increase)
+   - ASID allocation efficiency (should improve)
 
 ## Profiling Metrics
 
@@ -157,8 +291,11 @@ Provides userspace access to profiling data:
 # Run basic functionality test
 ./asid_test
 
+# Run comprehensive correctness test
+./asid_correctness_test
+
 # Check for any failures or memory corruption
-# If test passes, ASID mechanism is working correctly
+# If tests pass, ASID mechanism is working correctly
 ```
 
 ### 2. Performance Analysis
@@ -166,10 +303,13 @@ Provides userspace access to profiling data:
 # Reset statistics before testing
 ./asid_profiler --reset
 
-# Run performance benchmark
-./asid_time
+# Run performance benchmark with monitoring
+./asid_efficiency_monitor 2
 
-# View results
+# Run clean performance test
+./asid_efficiency_clean
+
+# View detailed results
 ./asid_profiler --all
 ```
 
@@ -192,112 +332,57 @@ watch -n 1 './asid_profiler --stats'
 ```bash
 # Establish baseline
 ./asid_profiler --reset
-./asid_time
+./asid_efficiency_clean
 ./asid_profiler --efficiency > baseline.txt
 
 # After code changes, compare results
 ./asid_profiler --reset
-./asid_time
-./asid_profiler --efficiency > current.txt
-diff baseline.txt current.txt
+./asid_efficiency_clean
+./asid_profiler --efficiency > updated.txt
+
+# Compare baseline.txt vs updated.txt
 ```
 
-## Interpreting Results
+### 5. New Implementation Validation
+```bash
+# Test correctness of new unified ASID manager
+./asid_correctness_test
 
-### Good Performance Indicators
-- **High Allocation Success Rate** (>99%): ASID allocation rarely fails
-- **High Flush Efficiency** (>80%): Most context switches avoid TLB flushes
-- **Low Generation Rollovers**: ASID space is efficiently utilized
-- **Reasonable Timing**: Low cycles per allocation/context switch
+# Measure efficiency improvements with detailed monitoring
+./asid_efficiency_monitor 1  # Light load
+./asid_efficiency_monitor 2  # Medium load  
+./asid_efficiency_monitor 3  # Heavy load
 
-### Performance Warning Signs
-- **High Allocation Failures**: May indicate ASID exhaustion
-- **Low Flush Efficiency**: Excessive TLB flushes hurt performance
-- **Frequent Generation Rollovers**: ASID space may be too small
-- **High Operation Latency**: Implementation may need optimization
+# Get clean performance baseline
+./asid_efficiency_clean compare
 
-### Optimization Opportunities
-- **High Map Searches vs Bitmap Searches**: Bitmap allocator may be inefficient
-- **Uneven ASID Usage**: Load balancing issues
-- **High TLB Flush Times**: Hardware-specific optimization needed
+# Analyze the results for improvement verification
+```
 
-## Configuration
+## Key Performance Indicators (KPIs)
 
-### Build Options
-The profiling system can be configured at build time:
-- `ASID_PROFILING_ENABLED`: Enable/disable profiling (default: enabled)
-- `ASID_DETAILED_LOGGING`: Enable detailed debug logging
-- `ASID_PER_CPU_STATS`: Track per-CPU statistics (future enhancement)
+When evaluating the new ASID implementation, focus on these metrics:
 
-### Runtime Configuration
-Some aspects can be tuned at runtime:
-- Statistics collection can be paused/resumed
-- Individual metric categories can be enabled/disabled
-- Sampling rates can be adjusted for overhead control
+1. **TLB Efficiency**: Lower flush rates, especially "all context" flushes
+2. **Context Switch Efficiency**: Lower percentage of switches requiring TLB flushes
+3. **Memory Performance**: Higher throughput and lower latency
+4. **ASID Utilization**: Better reuse patterns and fewer allocation failures
+5. **Generation Rollover**: Less frequent rollovers indicating better ASID management
 
 ## Troubleshooting
 
-### Common Issues
+**If correctness tests fail:**
+- Check for memory corruption patterns
+- Verify concurrent access is working properly
+- Look for generation rollover issues
 
-1. **"Failed to get ASID statistics" Error**
-   - Ensure the `sys_asid_profiling` syscall is implemented
-   - Check that the syscall number matches between kernel and userspace
-   - Verify proper privileges for system monitoring
+**If performance is worse than expected:**
+- Compare monitored vs clean test results
+- Check TLB flush patterns
+- Analyze ASID allocation efficiency
+- Look for excessive generation rollovers
 
-2. **All Statistics Show Zero**
-   - Profiling may be disabled at build time
-   - Statistics may have been recently reset
-   - System may not support PCID (check PCID enabled flag)
-
-3. **High Allocation Failures**
-   - ASID space (4096 entries) may be exhausted
-   - Consider increasing generation rollover threshold
-   - Check for ASID leaks (allocations without deallocations)
-
-4. **Poor Performance Results**
-   - Verify PCID is enabled in hardware and kernel
-   - Check for excessive debug logging overhead
-   - Consider workload characteristics and system load
-
-### Debug Tips
-
-1. **Enable Detailed Logging**
-   ```bash
-   # View kernel logs for detailed ASID operations
-   ./asid_profiler --log
-   dmesg | grep ASID_PROF
-   ```
-
-2. **Monitor Real-Time**
-   ```bash
-   # Watch statistics change in real-time
-   watch -n 1 './asid_profiler --stats'
-   ```
-
-3. **Compare Before/After**
-   ```bash
-   # Capture baseline and compare after changes
-   ./asid_profiler > before.txt
-   # ... make changes or run workload ...
-   ./asid_profiler > after.txt
-   diff before.txt after.txt
-   ```
-
-## Contributing
-
-When modifying the ASID system:
-
-1. **Add Profiling Calls**: New operations should include appropriate profiling
-2. **Test Thoroughly**: Run all test applications before submitting changes
-3. **Update Documentation**: Keep this README and code comments current
-4. **Performance Analysis**: Use profiling data to validate optimizations
-
-## Future Enhancements
-
-Planned improvements to the profiling system:
-- Per-CPU statistics for SMP systems
-- Histogram-based timing analysis
-- Automated performance regression detection
-- Integration with system-wide performance monitoring
-- Machine-readable output formats (JSON, CSV)
-- Real-time alerting for performance anomalies 
+**If tests crash or hang:**
+- Check memory allocation patterns
+- Verify thread synchronization
+- Look for deadlocks in ASID management 
