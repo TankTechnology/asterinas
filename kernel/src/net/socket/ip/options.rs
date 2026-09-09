@@ -152,6 +152,10 @@ impl Ipv6OptionSet {
         Self { v6only: true }
     }
 
+    pub(super) const fn v6only(&self) -> bool {
+        self.v6only
+    }
+
     pub(super) fn get_option(&self, option: &mut dyn SocketOption) -> Result<()> {
         sock_option_mut!(match option {
             v6only @ V6Only => {
@@ -171,5 +175,4 @@ impl Ipv6OptionSet {
         });
         Ok(())
     }
-
 }
