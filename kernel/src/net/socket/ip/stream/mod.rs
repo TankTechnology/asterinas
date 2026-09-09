@@ -20,7 +20,7 @@ use util::{Retrans, TcpOptionSet};
 
 use super::{
     addr::IpAddressFamily,
-    options::{IpOptionSet, SetIpLevelOption},
+    options::{IpOptionSet, Ipv6OptionSet, SetIpLevelOption},
 };
 use crate::{
     events::IoEvents,
@@ -63,6 +63,7 @@ pub struct StreamSocket {
     // FIXME: We perform userspace reads/writes when holding the spin locks (e.g., this state lock
     // and other locks in `aster-bigtcp`), which will break the atomic mode.
     state: RwLock<Takeable<State>>,
+    family: IpAddressFamily,
     options: RwLock<OptionSet>,
     timeouts: SocketTimeouts,
 
@@ -85,6 +86,7 @@ enum State {
 struct OptionSet {
     socket: SocketOptionSet,
     ip: IpOptionSet,
+    ipv6: Ipv6OptionSet,
     tcp: TcpOptionSet,
 }
 
@@ -92,8 +94,14 @@ impl OptionSet {
     fn new() -> Self {
         let socket = SocketOptionSet::new_tcp();
         let ip = IpOptionSet::new_tcp();
+        let ipv6 = Ipv6OptionSet::new();
         let tcp = TcpOptionSet::new();
-        OptionSet { socket, ip, tcp }
+        OptionSet {
+            socket,
+            ip,
+            ipv6,
+            tcp,
+        }
     }
 
     fn raw(&self) -> RawTcpOption {
@@ -116,6 +124,7 @@ impl StreamSocket {
         };
         Arc::new(Self {
             state: RwLock::new(Takeable::new(State::Init(init_stream))),
+            family,
             options: RwLock::new(OptionSet::new()),
             timeouts: SocketTimeouts::new(),
             pollee: Pollee::new(),
@@ -128,9 +137,11 @@ impl StreamSocket {
         listener_options: &OptionSet,
         listener_timeouts: &SocketTimeouts,
         is_nonblocking: bool,
+        family: IpAddressFamily,
     ) -> Arc<Self> {
         let options = connected_stream.raw_with(|raw_tcp_socket| {
             let mut options = OptionSet::new();
+            options.ipv6 = listener_options.ipv6;
 
             // Inherit socket options from `raw_tcp_socket` first, then fall
             // back to `listener_options` for options the raw socket cannot
@@ -171,6 +182,7 @@ impl StreamSocket {
 
         Arc::new(Self {
             state: RwLock::new(Takeable::new(State::Connected(connected_stream))),
+            family,
             options: RwLock::new(options),
             timeouts: listener_timeouts.clone(),
             pollee,
@@ -346,6 +358,7 @@ impl StreamSocket {
                 &listener_options,
                 &self.timeouts,
                 is_nonblocking,
+                self.family,
             );
             (accepted_socket as _, remote_endpoint.into())
         });
@@ -668,6 +681,15 @@ impl Socket for StreamSocket {
             res => return res,
         }
 
+        // Deal with IPv6-level options.  AF_INET sockets deliberately do not
+        // expose SOL_IPV6 options, matching Linux's protocol-family checks.
+        if self.family == IpAddressFamily::IPv6 {
+            match options.ipv6.get_option(option) {
+                Err(err) if err.error() == Errno::ENOPROTOOPT => (),
+                res => return res,
+            }
+        }
+
         // Deal with TCP-level options
         // FIXME: Here we only return the previously set values, without actually
         // asking the underlying sockets for the real, effective values.
@@ -752,8 +774,19 @@ impl Socket for StreamSocket {
                 // Deal with IP-level options
                 match options.ip.set_option(option, state.as_ref()) {
                     Err(err) if err.error() == Errno::ENOPROTOOPT => {
-                        // Deal with TCP-level options
-                        do_tcp_setsockopt(option, &mut options, state.as_mut())?
+                        if self.family == IpAddressFamily::IPv6 {
+                            match options.ipv6.set_option(option) {
+                                Ok(()) => NeedIfacePoll::FALSE,
+                                Err(err) if err.error() == Errno::ENOPROTOOPT => {
+                                    // Deal with TCP-level options
+                                    do_tcp_setsockopt(option, &mut options, state.as_mut())?
+                                }
+                                Err(err) => return Err(err),
+                            }
+                        } else {
+                            // Deal with TCP-level options
+                            do_tcp_setsockopt(option, &mut options, state.as_mut())?
+                        }
                     }
                     Err(err) => return Err(err),
                     Ok(need_iface_poll) => need_iface_poll,
