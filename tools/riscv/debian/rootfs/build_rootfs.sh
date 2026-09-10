@@ -853,6 +853,9 @@ extract_package_index_checksums() {
 admit_downloaded_packages() {
     local archive
     local archive_sha256
+    local archive_name
+    local archive_architecture
+    local archive_version
     local admitted_row
     local admitted_name
     local admitted_architecture
@@ -860,6 +863,20 @@ admit_downloaded_packages() {
 
     : >"$WORK_DIR/source-metadata/package-checksums"
     for archive in "$WORK_DIR"/debs/*.deb; do
+        archive_name="$(dpkg-deb -f "$archive" Package 2>/dev/null || true)"
+        archive_architecture="$(dpkg-deb -f "$archive" Architecture 2>/dev/null || true)"
+        archive_version="$(dpkg-deb -f "$archive" Version 2>/dev/null || true)"
+        [[ -n "$archive_name" && -n "$archive_architecture" &&
+            -n "$archive_version" ]] ||
+            die "cannot inspect downloaded package archive: ${archive##*/}"
+        if ! package_row_is_installed \
+            "$archive_name" "$archive_architecture" "$archive_version" \
+            "$WORK_DIR/packages.lock"; then
+            # A cached archive can be superseded by the version selected during
+            # this build.  It is not part of the installed package set and
+            # must not be required to resolve against the current index.
+            continue
+        fi
         archive_sha256="$(sha256sum "$archive")"
         archive_sha256="${archive_sha256%% *}"
         admitted_row="$(resolve_downloaded_package_row \
@@ -867,15 +884,6 @@ admit_downloaded_packages() {
             "$WORK_DIR/package-index-checksums")"
         IFS=$'\t' read -r admitted_name admitted_architecture \
             admitted_version _ _ <<<"$admitted_row"
-        if ! package_row_is_installed \
-            "$admitted_name" "$admitted_architecture" "$admitted_version" \
-            "$WORK_DIR/packages.lock"; then
-            # debootstrap leaves its original archives in apt's cache.  A
-            # subsequent security update can install a newer version while
-            # retaining the superseded archive.  Only the installed package
-            # set belongs in the frozen-root provenance.
-            continue
-        fi
         printf '%s\n' "$admitted_row" >> \
             "$WORK_DIR/source-metadata/package-checksums"
 
