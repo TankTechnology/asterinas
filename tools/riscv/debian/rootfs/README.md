@@ -53,15 +53,19 @@ The default HTTPS mirror is TUNA:
 tools/riscv/debian/rootfs/build_rootfs.sh
 ```
 
-If TUNA fails, retry explicitly with USTC, then official Debian. Do not persist
-either URL in system apt configuration.
+If TUNA fails, Firefox profiles keep TUNA as the signed source identity but
+may use a documented transport mirror for the build. Do not persist the
+transport URL in the guest's apt configuration:
 
 ```bash
-tools/riscv/debian/rootfs/build_rootfs.sh \
-  --mirror https://mirrors.ustc.edu.cn/debian
-tools/riscv/debian/rootfs/build_rootfs.sh \
-  --mirror https://deb.debian.org/debian
+ASTERINAS_FETCH_MIRROR=https://mirrors.ustc.edu.cn/debian \
+  tools/riscv/debian/rootfs/build_rootfs.sh --profile browser-web
+ASTERINAS_FETCH_MIRROR=https://deb.debian.org/debian \
+  tools/riscv/debian/rootfs/build_rootfs.sh --profile browser-web
 ```
+
+For non-Firefox profiles, `--mirror` remains the explicit source and transport
+override.
 
 The signed output is under `target/debian-riscv/rootfs/`. Reuse it while this
 verification succeeds; do not rebuild merely to repeat a test:

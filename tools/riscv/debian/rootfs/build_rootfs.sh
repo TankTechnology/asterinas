@@ -48,6 +48,7 @@ readonly -a PUBLISHED_PATHS=(
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 CACHE_DIR="$DEFAULT_CACHE_DIR"
 MIRROR="$DEFAULT_MIRROR"
+FETCH_MIRROR=""
 SUITE="$SUPPORTED_SUITE"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH-$DEFAULT_SOURCE_DATE_EPOCH}"
 WORK_DIR=""
@@ -237,6 +238,20 @@ validate_configuration() {
     if is_firefox_profile && [[ "$MIRROR" != "$DEFAULT_MIRROR" ]]; then
         die "Firefox profile base mirror must be exactly: $DEFAULT_MIRROR"
     fi
+    FETCH_MIRROR="${ASTERINAS_FETCH_MIRROR:-$MIRROR}"
+    [[ "$FETCH_MIRROR" =~ ^https://[^/?#[:space:]]+(/[^?#[:space:]]*)?/?$ ]] ||
+        die "fetch mirror must be an HTTPS URL without query or fragment"
+    FETCH_MIRROR="${FETCH_MIRROR%/}"
+    if [[ "$FETCH_MIRROR" != "$MIRROR" ]]; then
+        case "$FETCH_MIRROR" in
+            https://mirrors.ustc.edu.cn/debian | https://deb.debian.org/debian)
+                ;;
+            *)
+                die "unsupported fetch mirror override: $FETCH_MIRROR"
+                ;;
+        esac
+        log "using transport mirror $FETCH_MIRROR while retaining source identity $MIRROR"
+    fi
     [[ "$SOURCE_DATE_EPOCH" =~ ^(0|[1-9][0-9]*)$ ]] ||
         die "SOURCE_DATE_EPOCH must be a canonical nonnegative decimal integer"
     decimal_is_at_most "$SOURCE_DATE_EPOCH" "$MAX_SOURCE_DATE_EPOCH" ||
@@ -405,7 +420,7 @@ cleanup() {
 
 fetch_and_verify_release() {
     local inrelease="$WORK_DIR/source-metadata/InRelease"
-    local release_url="$MIRROR/dists/$SUITE/InRelease"
+    local release_url="$FETCH_MIRROR/dists/$SUITE/InRelease"
     local security_inrelease="$WORK_DIR/source-metadata/Security-InRelease"
     local script_directory
     local repository_root
@@ -502,7 +517,7 @@ bootstrap_rootfs() {
         "--keyring=$DEBIAN_KEYRING" \
         "$SUITE" \
         "$stage" \
-        "$MIRROR"
+        "$FETCH_MIRROR"
 
     install -m 0755 -- "$(command -v qemu-riscv64-static)" \
         "$stage/usr/bin/qemu-riscv64-static"
@@ -554,7 +569,7 @@ install_rootfs_packages() {
     local bootstrap_ca="$stage/etc/ssl/certs/asterinas-bootstrap-ca.crt"
 
     log "phase 4/8: updating signed package indexes"
-    printf 'deb %s %s main\n' "$MIRROR" "$SUITE" >"$stage/etc/apt/sources.list"
+    printf 'deb %s %s main\n' "$FETCH_MIRROR" "$SUITE" >"$stage/etc/apt/sources.list"
     if is_firefox_profile; then
         printf 'deb %s trixie-security main\n' "$SECURITY_MIRROR" \
             >>"$stage/etc/apt/sources.list"
@@ -644,7 +659,7 @@ audit_packages() {
         script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
         repository_root="$(cd -- "$script_directory/../../../.." && pwd -P)"
     else
-        verify_release_is_unchanged "$WORK_DIR" "$MIRROR" "$SUITE" "$DEBIAN_RELEASE"
+        verify_release_is_unchanged "$WORK_DIR" "$FETCH_MIRROR" "$SUITE" "$DEBIAN_RELEASE"
     fi
     LC_ALL=C dpkg-query \
         "--admindir=$stage/var/lib/dpkg" \
@@ -767,7 +782,7 @@ verify_m5_releases_are_unchanged() {
     repository_root="$(cd -- "$script_directory/../../../.." && pwd -P)"
     for role in base security; do
         if [[ "$role" == base ]]; then
-            mirror="$MIRROR"
+            mirror="$FETCH_MIRROR"
             suite="$SUITE"
             retained="$WORK_DIR/source-metadata/InRelease"
         else
