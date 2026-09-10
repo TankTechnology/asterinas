@@ -57,23 +57,33 @@ impl datagram_common::Bound for BoundDatagram {
         writer: &mut dyn MultiWrite,
         flags: RecvFlags,
     ) -> Result<(RecvOutput, Self::Endpoint)> {
+        // `UdpSocket::recv` holds the socket spinlock while invoking its
+        // callback. Copy into kernel memory first so a fault in the user
+        // destination cannot enter the VM page-fault path in atomic mode.
+        let copy_capacity = self
+            .bound_socket
+            .raw_with(|socket| socket.payload_recv_capacity())
+            .min(writer.sum_lens());
+        let mut packet_buf = Vec::with_capacity(copy_capacity);
+
         let result = self
             .bound_socket
             .recv(flags.receive_behavior(), |packet, udp_metadata| {
                 let message_len = packet.len();
-                let copied_res = writer
-                    .write(&mut VmReader::from(packet))
-                    .map_err(Into::into);
+                let copy_len = message_len.min(copy_capacity);
+                packet_buf.extend_from_slice(&packet[..copy_len]);
                 let endpoint = udp_metadata.endpoint;
-                (copied_res, endpoint, message_len)
+                (endpoint, message_len)
             });
 
         match result {
-            Ok((Ok(copied_len), endpoint, message_len)) => {
+            Ok((endpoint, message_len)) => {
+                let copied_len = writer
+                    .write(&mut VmReader::from(packet_buf.as_slice()))
+                    .map_err(Error::from)?;
                 let output = RecvOutput::new_for_packet(flags, copied_len, message_len);
                 Ok((output, endpoint))
             }
-            Ok((Err(e), _, _)) => Err(e),
             Err(RecvError::Exhausted) => {
                 return_errno_with_message!(Errno::EAGAIN, "the receive buffer is empty")
             }
