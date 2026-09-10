@@ -78,14 +78,18 @@ fn demap_udp_repr(repr: IpRepr, iface_ipv4_addr: Option<Ipv4Address>) -> IpRepr 
         return IpRepr::Ipv6(repr6);
     };
     let src_addr = mapped_ipv4(repr6.src_addr).or_else(|| {
-        repr6
-            .src_addr
-            .is_unspecified()
-            .then_some(if dst_addr.is_loopback() {
-                Ipv4Address::new(127, 0, 0, 1)
-            } else {
-                iface_ipv4_addr?
-            })
+        // smoltcp may select an IPv6 source for an IPv4-mapped destination
+        // (for example `::1` on the loopback interface). A mapped packet must
+        // leave through the IPv4 path, so translate unspecified/loopback
+        // sources to the corresponding IPv4 source and otherwise fall back to
+        // the interface's IPv4 address.
+        if dst_addr.is_loopback()
+            && (repr6.src_addr.is_unspecified() || repr6.src_addr.is_loopback())
+        {
+            Some(Ipv4Address::new(127, 0, 0, 1))
+        } else {
+            iface_ipv4_addr
+        }
     });
     let Some(src_addr) = src_addr else {
         return IpRepr::Ipv6(repr6);
@@ -564,6 +568,35 @@ mod tests {
         let dst_addr = Ipv4Address::new(192, 0, 2, 1);
         let repr = demap_udp_repr(
             mapped_udp_repr(Ipv6Address::UNSPECIFIED, dst_addr),
+            Some(iface_addr),
+        );
+        let IpRepr::Ipv4(repr) = repr else {
+            panic!("IPv4-mapped UDP destination must produce an IPv4 packet");
+        };
+        assert_eq!(repr.src_addr, iface_addr);
+        assert_eq!(repr.dst_addr, dst_addr);
+    }
+
+    #[ktest]
+    fn loopback_dual_stack_udp_source_uses_ipv4_source() {
+        let loopback = Ipv4Address::new(127, 0, 0, 1);
+        let repr = demap_udp_repr(
+            mapped_udp_repr(Ipv6Address::LOCALHOST, loopback),
+            Some(Ipv4Address::new(10, 0, 2, 15)),
+        );
+        let IpRepr::Ipv4(repr) = repr else {
+            panic!("IPv4-mapped UDP destination must produce an IPv4 packet");
+        };
+        assert_eq!(repr.src_addr, loopback);
+        assert_eq!(repr.dst_addr, loopback);
+    }
+
+    #[ktest]
+    fn loopback_dual_stack_udp_source_uses_iface_for_external_destination() {
+        let iface_addr = Ipv4Address::new(10, 0, 2, 15);
+        let dst_addr = Ipv4Address::new(192, 0, 2, 1);
+        let repr = demap_udp_repr(
+            mapped_udp_repr(Ipv6Address::LOCALHOST, dst_addr),
             Some(iface_addr),
         );
         let IpRepr::Ipv4(repr) = repr else {

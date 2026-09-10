@@ -8,7 +8,7 @@ use ostd::sync::SpinLock;
 use smoltcp::{
     iface::Context,
     socket::udp::UdpMetadata,
-    wire::{IpAddress, IpRepr, UdpRepr},
+    wire::{IpAddress, IpListenEndpoint, IpRepr, UdpRepr},
 };
 
 use super::{
@@ -66,13 +66,6 @@ impl<E: Ext> UdpSocketBg<E> {
         self.bound.port()
     }
 
-    fn accepts_mapped_ipv4(ip_repr: &IpRepr) -> bool {
-        matches!(
-            ip_repr.dst_addr(),
-            IpAddress::Ipv6(addr) if addr.to_bits() >> 32 == 0xffff
-        )
-    }
-
     /// Tries to process an incoming packet and returns whether the packet is processed.
     pub(crate) fn process(
         &self,
@@ -83,9 +76,7 @@ impl<E: Ext> UdpSocketBg<E> {
     ) -> bool {
         let mut socket = self.inner.socket.lock();
 
-        if !socket.accepts(cx, ip_repr, udp_repr)
-            && !(self.inner.accepts_ipv4 && Self::accepts_mapped_ipv4(ip_repr))
-        {
+        if !socket.accepts(cx, ip_repr, udp_repr) {
             return false;
         }
 
@@ -154,7 +145,18 @@ impl<E: Ext> UdpSocket<E> {
         let socket = {
             let mut socket = new_udp_socket();
 
-            if let Err(err) = socket.bind(local_endpoint) {
+            // A dual-stack IPv6 wildcard must accept both native IPv6 and
+            // IPv4-mapped packets. Keep the smoltcp endpoint unspecified so
+            // its `accepts()` check agrees with the translated packet.
+            let bind_endpoint = IpListenEndpoint {
+                addr: if accepts_ipv4 {
+                    None
+                } else {
+                    Some(local_endpoint.addr)
+                },
+                port: local_endpoint.port,
+            };
+            if let Err(err) = socket.bind(bind_endpoint) {
                 return Err((bound, err));
             }
 

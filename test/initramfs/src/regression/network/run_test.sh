@@ -4,6 +4,10 @@
 
 set -e
 
+# Keep this entry point usable both from the regression dispatcher (which
+# changes into the test directory) and when invoked directly by a QEMU gate.
+cd "$(dirname "$0")"
+
 ./tcp_server &
 sleep 0.2
 ./tcp_client
