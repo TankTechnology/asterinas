@@ -2387,6 +2387,39 @@ generate_fontconfig_cache "$stage" "$3"
                 insecure, "https://www.bilibili.com/video/BV1Ab411c7De/"
             )
 
+    def test_bilibili_playback_probe_reuses_marionette_sandbox(self) -> None:
+        playback = json.loads(web_evidence()["bilibili-detail.json"])["playback"]
+        sample = {
+            "url": playback["url"],
+            "state": "video",
+            "currentSrc": playback["source"],
+            "src": playback["source"],
+            "sourceKind": playback["sourceKind"],
+            "paused": playback["paused"],
+            "ended": playback["ended"],
+            "readyState": playback["readyState"],
+            "networkState": playback["networkState"],
+            "duration": playback["duration"],
+            "currentTime": playback["finalCurrentTime"],
+            "bufferedEnd": playback["bufferedEnd"],
+            "videoWidth": playback["videoWidth"],
+            "videoHeight": playback["videoHeight"],
+            "errorCode": playback["errorCode"],
+            "errorMessage": playback["errorMessage"],
+            "playPromise": playback["playPromise"],
+            "playError": None,
+            "events": playback["events"],
+            "lastEvent": "timeupdate",
+            "decodedFrames": playback["decodedFrames"],
+        }
+        client = mock.Mock()
+        client.command.return_value = {"value": json.dumps(sample)}
+
+        self.assertEqual(_playback_probe(client), sample)
+        _, arguments = client.command.call_args.args
+        self.assertIs(arguments["newSandbox"], False)
+        self.assertEqual(arguments["sandbox"], "default")
+
     def test_bilibili_playback_probe_and_wait_are_bounded(self) -> None:
         expected_url = "https://www.bilibili.com/video/BV1Ab411c7De/"
 

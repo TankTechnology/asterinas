@@ -1183,7 +1183,12 @@ def _playback_probe(client: Marionette) -> dict[str, object]:
     response = client.command("WebDriver:ExecuteScript", {
         "script": _BILIBILI_PLAYBACK_SCRIPT,
         "args": [],
-        "newSandbox": True,
+        # Keep the playback probe in one Marionette sandbox.  The script
+        # attaches event listeners and stores the play() promise state on the
+        # live <video>; recreating the sandbox on every poll can orphan those
+        # callbacks, leaving a genuinely advancing video reported as
+        # playPromise=pending with zero event counts.
+        "newSandbox": False,
         "sandbox": "default",
         "line": 1,
         "filename": "asterinas-bilibili-playback",
