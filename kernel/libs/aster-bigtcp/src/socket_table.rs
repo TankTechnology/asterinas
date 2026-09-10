@@ -166,12 +166,17 @@ pub(crate) struct ConnectionKey {
 }
 
 impl ConnectionKey {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         local_addr: IpAddress,
         local_port: PortNum,
         remote_addr: IpAddress,
         remote_port: PortNum,
     ) -> Self {
+        // Keep IPv4 and IPv4-mapped IPv6 tuples in the same connection
+        // namespace. This lets a dual-stack listener find later IPv4 packets
+        // after the first SYN has been represented as a mapped IPv6 endpoint.
+        let local_addr = normalize_connection_addr(local_addr);
+        let remote_addr = normalize_connection_addr(remote_addr);
         let hash = hash_local_remote(local_addr, local_port, remote_addr, remote_port);
         Self {
             local_addr,
@@ -184,6 +189,13 @@ impl ConnectionKey {
 
     pub(crate) const fn hash(&self) -> SocketHash {
         self.hash
+    }
+}
+
+fn normalize_connection_addr(addr: IpAddress) -> IpAddress {
+    match addr {
+        IpAddress::Ipv4(addr) => IpAddress::Ipv6(addr.to_ipv6_mapped()),
+        IpAddress::Ipv6(addr) => IpAddress::Ipv6(addr),
     }
 }
 
@@ -364,16 +376,51 @@ impl<E: Ext> SocketTable<E> {
     }
 
     pub(crate) fn lookup_listener(&self, key: &ListenerKey) -> Option<&Arc<TcpListenerBg<E>>> {
-        let bucket = {
+        let exact_bucket = {
             let hash = key.hash();
             let bucket_index = hash & LISTENER_BUCKET_MASK;
             &self.listener_buckets[bucket_index as usize]
         };
-
-        bucket
+        if let Some(listener) = exact_bucket
             .listeners
             .iter()
             .find(|listener| listener.listener_key() == key)
+        {
+            return Some(listener);
+        }
+
+        let wildcard_addr = match key.addr {
+            IpAddress::Ipv4(_) => IpAddress::Ipv4(Ipv4Addr::UNSPECIFIED),
+            IpAddress::Ipv6(_) => IpAddress::Ipv6(core::net::Ipv6Addr::UNSPECIFIED),
+        };
+        let wildcard_key = ListenerKey::new(wildcard_addr, key.port);
+        let wildcard_bucket = {
+            let hash = wildcard_key.hash();
+            let bucket_index = hash & LISTENER_BUCKET_MASK;
+            &self.listener_buckets[bucket_index as usize]
+        };
+        if let Some(listener) = wildcard_bucket
+            .listeners
+            .iter()
+            .find(|listener| listener.listener_key() == &wildcard_key)
+        {
+            return Some(listener);
+        }
+
+        if !matches!(key.addr, IpAddress::Ipv4(_)) {
+            return None;
+        }
+
+        // An IPv6 wildcard listener with IPV6_V6ONLY cleared also owns the
+        // IPv4 wildcard namespace. Keep the normal IPv4 exact/wildcard
+        // lookup priority above, then fall back to this listener.
+        let v6_wildcard =
+            ListenerKey::new(IpAddress::Ipv6(core::net::Ipv6Addr::UNSPECIFIED), key.port);
+        let bucket_index = v6_wildcard.hash() & LISTENER_BUCKET_MASK;
+        self.listener_buckets[bucket_index as usize]
+            .listeners
+            .iter()
+            .find(|listener| listener.listener_key() == &v6_wildcard && listener.accepts_ipv4())
     }
 
     pub(crate) fn lookup_connection(

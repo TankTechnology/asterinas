@@ -64,11 +64,9 @@ pub(super) enum IpPacket<'a> {
 /// to their IPv4 counterparts for binding purposes. This ensures that binding
 /// to `192.0.2.1:80` and `::ffff:192.0.2.1:80` are treated as the same.
 //
-// TODO: This type currently only handles port binding conflict detection. Full
-// dual-stack support is not yet implemented, including:
-// - Accepting IPv4 connections on IPv6 wildcard socket (binding to `::`).
-// - Returning IPv4-mapped addresses in `accept()` for IPv4 clients.
-// - Proper handling of `IPV6_V6ONLY` socket option.
+// TCP dual-stack listeners use this namespace to reserve the IPv4-mapped port
+// alongside their IPv6 wildcard port. Packet translation and listener matching
+// are handled by the TCP poll path.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct NormalizedAddress(Ipv6Address);
 
@@ -443,6 +441,17 @@ impl PortTable {
             }
         };
 
+        if !config.is_backlog()
+            && self.used_ports.iter().any(|(existing, state)| {
+                existing.port == port
+                    && existing.protocol == protocol
+                    && port_addresses_conflict(existing.addr, addr)
+                    && (!config_can_reuse || !state.can_reuse())
+            })
+        {
+            return Err(BindError::InUse);
+        }
+
         let key = PortKey {
             addr,
             port,
@@ -499,16 +508,16 @@ impl PortTable {
             }
         }
 
-        let mut key = PortKey {
-            addr,
-            port: 0,
-            protocol,
-        };
         let start_port = self.next_ephemeral_port;
         let mut port = start_port;
         loop {
-            key.port = port;
-            if !external_conflict(port) && !self.used_ports.contains_key(&key) {
+            if !external_conflict(port)
+                && !self.used_ports.keys().any(|existing| {
+                    existing.port == port
+                        && existing.protocol == protocol
+                        && port_addresses_conflict(existing.addr, addr)
+                })
+            {
                 self.next_ephemeral_port = next_ephemeral_port_after(port);
                 return Some(port);
             }
@@ -555,6 +564,25 @@ impl PortTable {
         } else {
             port_state.nreuse -= 1;
         }
+    }
+}
+
+/// Returns whether two normalized addresses share the same bind namespace.
+///
+/// IPv4 addresses are stored as IPv4-mapped IPv6 values, so the mapped family
+/// must be kept separate from native IPv6 when applying wildcard rules.
+fn port_addresses_conflict(left: NormalizedAddress, right: NormalizedAddress) -> bool {
+    let left_bits = left.0.to_bits();
+    let right_bits = right.0.to_bits();
+    let left_is_v4 = left_bits >> 32 == 0xffff;
+    let right_is_v4 = right_bits >> 32 == 0xffff;
+    if left_is_v4 != right_is_v4 {
+        return false;
+    }
+    if left_is_v4 {
+        left_bits == right_bits || left_bits & 0xffff_ffff == 0 || right_bits & 0xffff_ffff == 0
+    } else {
+        left_bits == right_bits || left_bits == 0 || right_bits == 0
     }
 }
 
