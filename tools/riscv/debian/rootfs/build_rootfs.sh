@@ -1424,20 +1424,39 @@ configure_desktop_m9_software() {
     local stage="$1"
     local script_directory
     local service_name="asterinas-desktop-m9-software"
+    local wants_directory="$stage/etc/systemd/system/graphical.target.wants"
 
     script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-    # M9 is an application smoke gate, not a second browser-quality run. Keep
-    # the M8 unit available for explicit quality profiles, but do not start it
-    # concurrently with FFmpeg on the constrained RISC-V guest.
+    # M9 is an application smoke gate, not a second browser-quality run. Do
+    # not start the NetSurf M6/M7/M8 units concurrently with FFmpeg on the
+    # constrained RISC-V guest. The M4 session/evidence pair is retained in
+    # its browser-free core mode below so the software gate has a real X11
+    # desktop without making browser liveness part of its contract.
     rm -f -- \
-        "$stage/etc/systemd/system/graphical.target.wants/asterinas-desktop-m8-browser-quality.service"
+        "$wants_directory/asterinas-desktop-m6-browser.service" \
+        "$wants_directory/asterinas-desktop-m7-baidu.service" \
+        "$wants_directory/asterinas-desktop-m8-browser-quality.service"
+    install -d -m 0755 -- \
+        "$stage/etc/systemd/system/asterinas-desktop-m4.service.d" \
+        "$stage/etc/systemd/system/asterinas-desktop-m4-evidence.service.d"
+    cat >"$stage/etc/systemd/system/asterinas-desktop-m4.service.d/m9-software.conf" <<'EOF'
+[Service]
+Environment=ASTERINAS_DESKTOP_BROWSER_ENABLED=0
+EOF
+    cat >"$stage/etc/systemd/system/asterinas-desktop-m4-evidence.service.d/m9-software.conf" <<'EOF'
+[Service]
+Environment=ASTERINAS_DESKTOP_BROWSER_ENABLED=0
+EOF
+    chmod 0644 -- \
+        "$stage/etc/systemd/system/asterinas-desktop-m4.service.d/m9-software.conf" \
+        "$stage/etc/systemd/system/asterinas-desktop-m4-evidence.service.d/m9-software.conf"
     install -D -m 0755 -- \
         "$script_directory/desktop_m9_software_evidence.sh" \
         "$stage/usr/lib/asterinas/desktop-m9-software-evidence"
     cat >"$stage/etc/systemd/system/$service_name.service" <<'EOF'
 [Unit]
 Description=Asterinas Debian M9 desktop software evidence
-After=asterinas-desktop-m7-baidu.service
+After=asterinas-desktop-m4-evidence.service asterinas-desktop-m5-network.service
 
 [Service]
 Type=oneshot

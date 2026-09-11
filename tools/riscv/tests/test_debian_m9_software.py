@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.riscv.debian.rootfs.desktop_m4_gate import DESKTOP_M4_MILESTONES
+from tools.riscv.debian.rootfs.desktop_m4_gate import DESKTOP_M4_CORE_MILESTONES
 from tools.riscv.debian.rootfs.desktop_m5_network_gate import (
     DESKTOP_M5_QEMU_MILESTONES,
 )
@@ -34,8 +34,7 @@ MAKEFILE = REPOSITORY_ROOT / "Makefile"
 def _software_transcript() -> bytes:
     markers = (
         *DESKTOP_M5_QEMU_MILESTONES,
-        *DESKTOP_M4_MILESTONES,
-        DESKTOP_M8_READY_MARKER,
+        *DESKTOP_M4_CORE_MILESTONES,
         DESKTOP_M9_SOFTWARE_READY_MARKER,
         DESKTOP_M9_VIDEO_PLAYER_READY_MARKER,
     )
@@ -99,10 +98,20 @@ class DebianDesktopM9SoftwareContractTests(unittest.TestCase):
         self.assertIn("desktop-m9-software", builder)
         self.assertIn("desktop_m9_software_evidence.sh", builder)
         self.assertIn(
-            "After=asterinas-desktop-m7-baidu.service", builder
+            "After=asterinas-desktop-m4-evidence.service "
+            "asterinas-desktop-m5-network.service",
+            builder,
         )
         self.assertIn(
-            "asterinas-desktop-m8-browser-quality.service", builder
+            '"$wants_directory/asterinas-desktop-m6-browser.service"',
+            builder,
+        )
+        self.assertIn(
+            '"$wants_directory/asterinas-desktop-m7-baidu.service"',
+            builder,
+        )
+        self.assertIn(
+            "Environment=ASTERINAS_DESKTOP_BROWSER_ENABLED=0", builder
         )
         self.assertIn("rm -f", builder)
         self.assertIn(

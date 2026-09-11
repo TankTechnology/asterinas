@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import sys
 
-from tools.riscv.debian.rootfs.desktop_m4_gate import DESKTOP_M4_MILESTONES
+from tools.riscv.debian.rootfs.desktop_m3_gate import classify_desktop
+from tools.riscv.debian.rootfs.desktop_m4_gate import DESKTOP_M4_CORE_MILESTONES
 from tools.riscv.debian.rootfs.desktop_m5_network_gate import (
     DESKTOP_M5_QEMU_MILESTONES,
-    classify_desktop_m5_qemu,
 )
 from tools.riscv.debian.rootfs.desktop_m5_qemu_gate import (
     DesktopM5QemuOperations,
@@ -47,9 +47,13 @@ def classify_desktop_m9_software(
 ) -> GateResult:
     """Require complete desktop/network and software evidence."""
 
-    base = classify_desktop_m5_qemu(
+    if b"debian_desktop_m4_fail reason=" in transcript.lower():
+        return GateResult(False, "desktop guest failure", None)
+    base = classify_desktop(
         transcript,
         expected_debian_release=expected_debian_release,
+        milestones=(*DESKTOP_M5_QEMU_MILESTONES, *DESKTOP_M4_CORE_MILESTONES),
+        failure_marker=b"DEBIAN_NETWORK_M5_FAIL reason=",
     )
     if not base.passed:
         return base
@@ -80,7 +84,7 @@ class DesktopM9SoftwareOperations(DesktopM5QemuOperations):
     ARTIFACT_PREFIX = "desktop-m9-software-qemu"
     MILESTONES = (
         *DESKTOP_M5_QEMU_MILESTONES,
-        *DESKTOP_M4_MILESTONES,
+        *DESKTOP_M4_CORE_MILESTONES,
         DESKTOP_M9_SOFTWARE_READY_MARKER,
         DESKTOP_M9_VIDEO_PLAYER_READY_MARKER,
     )
