@@ -109,6 +109,9 @@ class DebianDesktopM9SoftwareContractTests(unittest.TestCase):
             "ASTERINAS_DESKTOP_M9_COMMAND_TIMEOUT_SECONDS=120", builder
         )
         self.assertIn("ASTERINAS_DESKTOP_M9_WORK_DIRECTORY=/var/tmp", builder)
+        self.assertIn("install_maintainer_script_policy", builder)
+        self.assertIn("policy-rc.d", builder)
+        self.assertIn("exit 101", builder)
         self.assertIn("test_riscv_debian_desktop_m9_software_gate", makefile)
 
     def test_gate_stops_immediately_on_stage1_failure(self) -> None:

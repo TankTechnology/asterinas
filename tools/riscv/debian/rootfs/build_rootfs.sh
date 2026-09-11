@@ -567,6 +567,7 @@ verify_riscv_execution_boundary() {
 install_rootfs_packages() {
     local stage="$WORK_DIR/stage"
     local bootstrap_ca="$stage/etc/ssl/certs/asterinas-bootstrap-ca.crt"
+    local policy_rc="$stage/usr/sbin/policy-rc.d"
 
     log "phase 4/8: updating signed package indexes"
     printf 'deb %s %s main\n' "$FETCH_MIRROR" "$SUITE" >"$stage/etc/apt/sources.list"
@@ -619,13 +620,14 @@ install_rootfs_packages() {
         printf '#!/bin/sh\nexit 0\n' >"$fc_cache_wrapper"
         chmod 0755 -- "$fc_cache_wrapper"
     fi
+    install_maintainer_script_policy "$stage"
 
     log "phase 5/8: installing explicit minbase additions"
     run_chroot "$stage" /usr/bin/env \
         DEBIAN_FRONTEND=noninteractive \
         SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
         apt-get -y --no-install-recommends install "${INSTALL_PACKAGES[@]}"
-    rm -f -- "$fc_cache_wrapper"
+    rm -f -- "$fc_cache_wrapper" "$policy_rc"
     rm -f -- "$bootstrap_ca"
     run_chroot "$stage" /usr/bin/env \
         DEBIAN_FRONTEND=noninteractive \
@@ -635,6 +637,18 @@ install_rootfs_packages() {
         -exec cp -- {} "$WORK_DIR/debs/" \;
     compgen -G "$WORK_DIR/debs/*.deb" >/dev/null ||
         die "apt retained no downloaded package archives"
+}
+
+install_maintainer_script_policy() {
+    local stage="$1"
+    local policy_rc="$stage/usr/sbin/policy-rc.d"
+
+    install -d -- "${policy_rc%/*}"
+    cat >"$policy_rc" <<'EOF'
+#!/bin/sh
+exit 101
+EOF
+    chmod 0755 -- "$policy_rc"
 }
 
 audit_packages() {
