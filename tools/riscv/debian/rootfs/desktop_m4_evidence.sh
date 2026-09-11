@@ -13,6 +13,7 @@ readonly PROBE_TIMEOUT_SECONDS="${ASTERINAS_DESKTOP_M4_PROBE_TIMEOUT_SECONDS:-30
 readonly BROWSER_ENABLED="${ASTERINAS_DESKTOP_BROWSER_ENABLED:-1}"
 readonly USER_NAME="asterinas"
 readonly USER_ID="1000"
+readonly NETSURF_WINDOW_CLASS_REGEX='^(netsurf-gtk|netsurf|NetSurf)$'
 not_ready_reason="not-evaluated"
 
 emit() {
@@ -76,14 +77,14 @@ fail() {
 }
 
 move_single_window_to_overview_workspace() {
-    local instance_name="$1"
+    local class_regex="$1"
     local failure_prefix="$2"
     local window_output
     local -a windows=()
 
     if ! window_output="$(
         DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
-            xdotool search --onlyvisible --classname "^${instance_name}$"
+            xdotool search --onlyvisible --classname "$class_regex"
     )"; then
         fail "$failure_prefix-search"
     fi
@@ -148,15 +149,7 @@ ready() {
     probe xterm pgrep -u "$USER_ID" -x xterm >/dev/null || return 1
     if [[ "$BROWSER_ENABLED" == 1 ]]; then
         probe netsurf pgrep -u "$USER_ID" -x netsurf-gtk >/dev/null || return 1
-        probe netsurf-window env DISPLAY=:0 \
-            XAUTHORITY=/home/asterinas/.Xauthority \
-            xdotool search --onlyvisible --classname '^netsurf-gtk$' \
-            >/dev/null || return 1
     fi
-    probe xterm-window env DISPLAY=:0 \
-        XAUTHORITY=/home/asterinas/.Xauthority \
-        xdotool search --onlyvisible --classname '^xterm$' \
-        >/dev/null || return 1
     window_tree="$(
         bounded env DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
             xwininfo -root -tree 2>/dev/null
@@ -169,11 +162,12 @@ ready() {
     window_tree_lower="${window_tree,,}"
     if [[ "$BROWSER_ENABLED" == 1 ]]; then
         [[ "$window_tree_lower" == *netsurf* ]] || {
-            not_ready_reason="netsurf-tree"
+            not_ready_reason="netsurf-window"
             return 1
         }
     fi
-    [[ "$window_tree_lower" == *"asterinas terminal"* ]] || {
+    [[ "$window_tree_lower" == *"asterinas terminal"* &&
+        "$window_tree_lower" == *xterm* ]] || {
         not_ready_reason="terminal-tree"
         return 1
     }
@@ -189,9 +183,10 @@ done
 
 if [[ "${ASTERINAS_DESKTOP_SHOW_OVERVIEW:-0}" == 1 ]]; then
     if [[ "$BROWSER_ENABLED" == 1 ]]; then
-        move_single_window_to_overview_workspace netsurf-gtk overview-browser
+        move_single_window_to_overview_workspace \
+            "$NETSURF_WINDOW_CLASS_REGEX" overview-browser
     fi
-    move_single_window_to_overview_workspace xterm overview-terminal
+    move_single_window_to_overview_workspace '^xterm$' overview-terminal
     sleep 1
 fi
 
