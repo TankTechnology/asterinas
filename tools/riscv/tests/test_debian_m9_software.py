@@ -16,6 +16,7 @@ from tools.riscv.debian.rootfs.desktop_m5_network_gate import (
 from tools.riscv.debian.rootfs.desktop_m9_software_gate import (
     DESKTOP_M8_READY_MARKER,
     DESKTOP_M9_SOFTWARE_READY_MARKER,
+    DESKTOP_M9_VIDEO_PLAYER_READY_MARKER,
     DesktopM9SoftwareOperations,
     classify_desktop_m9_software,
 )
@@ -36,6 +37,7 @@ def _software_transcript() -> bytes:
         *DESKTOP_M4_MILESTONES,
         DESKTOP_M8_READY_MARKER,
         DESKTOP_M9_SOFTWARE_READY_MARKER,
+        DESKTOP_M9_VIDEO_PLAYER_READY_MARKER,
     )
     return ("\n".join(markers) + "\n").encode()
 
@@ -64,9 +66,13 @@ class DebianDesktopM9SoftwareContractTests(unittest.TestCase):
     def test_classifier_rejects_missing_duplicate_reordered_and_failure(self) -> None:
         valid = _software_transcript()
         software = (DESKTOP_M9_SOFTWARE_READY_MARKER + "\n").encode()
+        video = (DESKTOP_M9_VIDEO_PLAYER_READY_MARKER + "\n").encode()
         cases = (
             valid.replace(software, software * 2),
             valid.replace(software, b""),
+            valid.replace(video, video * 2),
+            valid.replace(video, b""),
+            valid.replace(software + video, video + software),
             valid + b"DEBIAN_DESKTOP_M9_FAIL reason=ffmpeg-timeout\n",
         )
 
@@ -128,6 +134,8 @@ class DebianDesktopM9SoftwareGuestTests(unittest.TestCase):
         script = EVIDENCE_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("-f rawvideo", script)
         self.assertIn("-threads 1", script)
+        self.assertIn("ffplay -nostdin -autoexit -an", script)
+        self.assertIn("SDL_VIDEODRIVER=x11", script)
         self.assertIn("${ASTERINAS_DESKTOP_M9_WORK_DIRECTORY:-/var/tmp}", script)
         self.assertNotIn("-f lavfi", script)
         console = self.directory / "console"
@@ -146,6 +154,9 @@ last=''
 for argument in "$@"; do
     last="$argument"
 done
+if [ "$last" = - ]; then
+    exit 0
+fi
 printf 'fake-png' >"$last"
 """,
         )
@@ -153,7 +164,28 @@ printf 'fake-png' >"$last"
             "ffprobe",
             """#!/bin/sh
 set -eu
-printf '16,16\\n'
+case "$*" in
+    *nb_read_frames*)
+        printf 'rawvideo,16,16,2\\n'
+        ;;
+    *)
+        printf '16,16\\n'
+        ;;
+esac
+""",
+        )
+        self._install_tool(
+            "ffplay",
+            """#!/bin/sh
+set -eu
+case "$*" in
+    *AsterinasM9Video*video.nut*)
+        exit 0
+        ;;
+    *)
+        exit 43
+        ;;
+esac
 """,
         )
 
@@ -177,7 +209,10 @@ printf '16,16\\n'
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             console.read_text(encoding="utf-8").splitlines(),
-            [DESKTOP_M9_SOFTWARE_READY_MARKER],
+            [
+                DESKTOP_M9_SOFTWARE_READY_MARKER,
+                DESKTOP_M9_VIDEO_PLAYER_READY_MARKER,
+            ],
         )
 
     def test_guest_smoke_reports_a_bounded_failure(self) -> None:

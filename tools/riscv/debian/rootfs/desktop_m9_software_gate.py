@@ -35,6 +35,10 @@ DESKTOP_M9_SOFTWARE_READY_MARKER = (
     "DEBIAN_DESKTOP_M9_SOFTWARE_READY "
     "vim=pass ffmpeg=pass ffprobe=pass media=pass"
 )
+DESKTOP_M9_VIDEO_PLAYER_READY_MARKER = (
+    "DEBIAN_DESKTOP_M9_VIDEO_PLAYER_READY "
+    "generator=ffmpeg probe=ffprobe decode=ffmpeg player=ffplay output=x11 status=pass"
+)
 DESKTOP_M9_FAILURE_MARKER = b"DEBIAN_DESKTOP_M9_FAIL reason="
 
 
@@ -52,13 +56,19 @@ def classify_desktop_m9_software(
     if DESKTOP_M9_FAILURE_MARKER.lower() in transcript.lower():
         return GateResult(False, "software guest failure", None)
 
-    marker = DESKTOP_M9_SOFTWARE_READY_MARKER.encode()
-    if transcript.count(marker) != 1:
+    software_marker = DESKTOP_M9_SOFTWARE_READY_MARKER.encode()
+    if transcript.count(software_marker) != 1:
         return GateResult(False, "missing or duplicate software evidence", None)
-    if transcript.find(marker) < transcript.find(
+    if transcript.find(software_marker) < transcript.find(
         DESKTOP_M5_QEMU_MILESTONES[-1].encode()
     ):
         return GateResult(False, "software milestones out of order", None)
+
+    video_marker = DESKTOP_M9_VIDEO_PLAYER_READY_MARKER.encode()
+    if transcript.count(video_marker) != 1:
+        return GateResult(False, "missing or duplicate video player evidence", None)
+    if transcript.find(video_marker) < transcript.find(software_marker):
+        return GateResult(False, "video player milestones out of order", None)
     return GateResult(True, "pass", None)
 
 
@@ -72,6 +82,7 @@ class DesktopM9SoftwareOperations(DesktopM5QemuOperations):
         *DESKTOP_M5_QEMU_MILESTONES,
         *DESKTOP_M4_MILESTONES,
         DESKTOP_M9_SOFTWARE_READY_MARKER,
+        DESKTOP_M9_VIDEO_PLAYER_READY_MARKER,
     )
     FAILURE_MARKER = DESKTOP_M9_FAILURE_MARKER
     ADDITIONAL_FAILURE_MARKERS = (

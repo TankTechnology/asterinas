@@ -14,6 +14,7 @@ readonly VIM_OUTPUT="${ASTERINAS_DESKTOP_M9_VIM_OUTPUT:-/run/asterinas-m9-vim.tx
 # the applications themselves.
 readonly WORK_DIRECTORY="${ASTERINAS_DESKTOP_M9_WORK_DIRECTORY:-/var/tmp}"
 readonly READY_MARKER="DEBIAN_DESKTOP_M9_SOFTWARE_READY vim=pass ffmpeg=pass ffprobe=pass media=pass"
+readonly VIDEO_PLAYER_READY_MARKER="DEBIAN_DESKTOP_M9_VIDEO_PLAYER_READY generator=ffmpeg probe=ffprobe decode=ffmpeg player=ffplay output=x11 status=pass"
 
 failure_emitted=0
 work_directory=""
@@ -59,6 +60,8 @@ work_directory="$(mktemp -d "$WORK_DIRECTORY/asterinas-desktop-m9.XXXXXX")" ||
 vim_output="$VIM_OUTPUT"
 media_output="$work_directory/frame.png"
 media_input="$work_directory/frame.rgb"
+video_frames="$work_directory/video.rgb"
+video_output="$work_directory/video.nut"
 
 check_deadline
 command -v vim >/dev/null 2>&1 || fail vim-missing
@@ -92,4 +95,33 @@ probe_output="$(bounded ffprobe -v error -select_streams v:0 \
     fail ffprobe-failed
 [[ "$probe_output" == '16,16' ]] || fail ffprobe-mismatch
 
+check_deadline
+command -v ffplay >/dev/null 2>&1 || fail ffplay-missing
+if ! bounded dd if=/dev/zero of="$video_frames" bs=768 count=2 status=none; then
+    fail video-input-failed
+fi
+if ! bounded ffmpeg -nostdin -v error -threads 1 -f rawvideo -pixel_format rgb24 \
+    -video_size 16x16 -framerate 2 -i "$video_frames" -frames:v 2 \
+    -c:v rawvideo -pix_fmt rgb24 -f nut -y "$video_output"; then
+    fail video-generate-failed
+fi
+[[ -s "$video_output" && ! -L "$video_output" ]] || fail video-output
+video_probe_output="$(bounded ffprobe -v error -count_frames -select_streams v:0 \
+    -show_entries stream=codec_name,width,height,nb_read_frames \
+    -of csv=p=0 "$video_output")" ||
+    fail video-probe-failed
+[[ "$video_probe_output" == 'rawvideo,16,16,2' ]] ||
+    fail video-probe-mismatch
+if ! bounded ffmpeg -nostdin -v error -threads 1 -i "$video_output" \
+    -frames:v 2 -f null -; then
+    fail video-decode-failed
+fi
+if ! bounded env DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
+    SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy SDL_RENDER_DRIVER=software \
+    ffplay -nostdin -autoexit -an -v error -x 64 -y 64 \
+        -window_title AsterinasM9Video "$video_output"; then
+    fail ffplay-failed
+fi
+
 emit "$READY_MARKER"
+emit "$VIDEO_PLAYER_READY_MARKER"
