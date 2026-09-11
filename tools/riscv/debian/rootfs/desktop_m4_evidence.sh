@@ -76,25 +76,44 @@ fail() {
     exit 1
 }
 
+window_id_for_class() {
+    local class_regex="$1"
+    local failure_prefix="$2"
+    local window_tree
+    local line
+    local window_id
+    local instance_name
+    local class_name
+    local -a windows=()
+
+    if ! window_tree="$(
+        bounded env DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
+            xwininfo -root -tree
+    )"; then
+        fail "$failure_prefix-tree"
+    fi
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]*(0x[0-9a-fA-F]+)[[:space:]].*:\ \(\"([^\"]+)\"[[:space:]]+\"([^\"]+)\"\) ]]; then
+            window_id="${BASH_REMATCH[1]}"
+            instance_name="${BASH_REMATCH[2]}"
+            class_name="${BASH_REMATCH[3]}"
+            if [[ "$instance_name" =~ $class_regex ||
+                "$class_name" =~ $class_regex ]]; then
+                windows+=("$window_id")
+            fi
+        fi
+    done <<<"$window_tree"
+    ((${#windows[@]} == 1)) || fail "$failure_prefix-window-count"
+    printf '%s\n' "${windows[0]}"
+}
+
 move_single_window_to_overview_workspace() {
     local class_regex="$1"
     local failure_prefix="$2"
     local window_output
-    local -a windows=()
-
-    if ! window_output="$(
-        DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
-            xdotool search --onlyvisible --classname "$class_regex"
-    )"; then
-        fail "$failure_prefix-search"
-    fi
-    ((${#window_output} <= 128)) || fail "$failure_prefix-search-output-too-long"
-    mapfile -t windows <<<"$window_output"
-    ((${#windows[@]} == 1)) || fail "$failure_prefix-window-count"
-    [[ "${windows[0]}" =~ ^[1-9][0-9]*$ ]] || \
-        fail "$failure_prefix-window-id"
+    window_output="$(window_id_for_class "$class_regex" "$failure_prefix")"
     DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
-        xdotool set_desktop_for_window "${windows[0]}" 1 || \
+        xdotool set_desktop_for_window "$window_output" 1 || \
         fail "$failure_prefix-workspace"
 }
 

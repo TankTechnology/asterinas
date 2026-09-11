@@ -1558,10 +1558,8 @@ WantedBy=multi-user.target
                     self.assertEqual(
                         xdotool_log.read_text(encoding="utf-8").splitlines(),
                         [
-                            "search --onlyvisible --classname ^(netsurf-gtk|netsurf|NetSurf)$",
-                            "set_desktop_for_window 42 1",
-                            "search --onlyvisible --classname ^xterm$",
-                            "set_desktop_for_window 43 1",
+                            "set_desktop_for_window 0x200003 1",
+                            "set_desktop_for_window 0x200001 1",
                         ],
                     )
                     self.assertEqual(
@@ -1571,7 +1569,7 @@ WantedBy=multi-user.target
                 else:
                     self.assertNotEqual(result.returncode, 0)
                     expected_reason = (
-                        "overview-browser-search"
+                        "overview-browser-workspace"
                         if missing == "overview-xdotool"
                         else "desktop-timeout"
                     )
@@ -1729,9 +1727,9 @@ printf '0x200003 "Asterinas Start - NetSurf": ("netsurf" "NetSurf")\n'
   printf '%s\n' "$*" >>"$ASTERINAS_DESKTOP_M4_XDOTOOL_LOG"
 [ "$ASTERINAS_DESKTOP_M4_TEST_MISSING" != overview-xdotool ] || exit 1
 case "$*" in
-  'search --onlyvisible --classname ^(netsurf-gtk|netsurf|NetSurf)$') printf '42\n' ;;
-  'search --onlyvisible --classname ^xterm$') printf '43\n' ;;
-  'search '*) exit 9 ;;
+  'set_desktop_for_window 0x200003 1') exit 0 ;;
+  'set_desktop_for_window 0x200001 1') exit 0 ;;
+  *) exit 9 ;;
 esac
 """,
         }
