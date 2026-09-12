@@ -3041,7 +3041,7 @@ generate_fontconfig_cache "$stage" "$3"
     def test_gate_explicitly_disables_insecure_certs_and_records_evidence(self) -> None:
         gate = (ROOTFS / "browser_web_marionette_gate.py").read_text()
         self.assertIn('"acceptInsecureCerts": False', gate)
-        self.assertIn('"pageLoadStrategy": "eager"', gate)
+        self.assertIn('"pageLoadStrategy": "none"', gate)
         self.assertIn('capabilities.get("acceptInsecureCerts") is not False', gate)
         self.assertIn("WebDriver:TakeScreenshot", gate)
         self.assertIn("DEBIAN_BROWSER_WEB_PLATFORM_READY", gate)

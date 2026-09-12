@@ -2060,12 +2060,10 @@ def _start_webdriver_session(
                 "WebDriver:NewSession",
                 {
                     "acceptInsecureCerts": False,
-                    # Eager navigation lets Firefox finish DOMContentLoaded
-                    # before the first ExecuteScript.  On the RISC-V build,
-                    # issuing a script immediately after a pageLoadStrategy
-                    # of none can race content-process replacement and leave
-                    # Marionette's JSWindowActor unavailable.
-                    "pageLoadStrategy": "eager",
+                    # Keep navigation asynchronous: public pages can retain
+                    # long-lived loaders.  The readiness probe below is the
+                    # bounded DOMContentLoaded barrier for this guest.
+                    "pageLoadStrategy": "none",
                     "strictFileInteractability": True,
                 },
             )
