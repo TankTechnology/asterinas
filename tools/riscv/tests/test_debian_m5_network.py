@@ -1875,6 +1875,10 @@ printf '200\t10.0.2.15'
         proxy = qemu_web_network_bootargs(network_gate.NetworkMode.PROXY)
         direct = qemu_web_network_bootargs(network_gate.NetworkMode.DIRECT)
 
+        self.assertIn(
+            "systemd.setenv=ASTERINAS_DESKTOP_M5_TIMEOUT_SECONDS=300",
+            direct,
+        )
         self.assertIn("ASTERINAS_WEB_NETWORK_MODE=proxy", proxy)
         self.assertIn("ASTERINAS_DESKTOP_PROXY_URL=http://10.0.2.2:17893", proxy)
         self.assertIn("ASTERINAS_WEB_NETWORK_MODE=direct", direct)
