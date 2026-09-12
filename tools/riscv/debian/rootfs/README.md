@@ -100,20 +100,33 @@ make build_riscv_debian_browser_web_dev_overlay \
   DEBIAN_BROWSER_WEB_DEV_ROOTFS=/absolute/path/to/development/rootfs
 ```
 
-The command has no network or package-install phase. It verifies the frozen
+The command has no network or package-install phase.
+It verifies the frozen
 base manifest and package checksums, reflink-copies the ext2 image when the
-filesystem supports it, replaces only the pre-existing regular files listed
-in `browser_web_dev_overlay.json`, and reads every replacement back through
-`debugfs`. A missing destination, symlinked source, unsafe path, byte mismatch,
-or mode mismatch fails closed without replacing the previous development
-output.
+filesystem supports it, and updates the regular files listed
+in `browser_web_dev_overlay.json`.
+Entries replace existing files by default.
+An entry with the optional boolean `"create": true` may also add a regular file
+under an existing directory;
+this permits adding a runtime script to an older frozen base.
+Every destination ancestor must already be a directory without symlink traversal.
+The command reads every updated file back through `debugfs`.
+A missing destination without the creation opt-in, symlinked source,
+unsafe path, byte mismatch, mode mismatch, non-root ownership,
+or nonzero timestamp fails closed
+without replacing the previous development output.
+Unexpected `debugfs` diagnostics also fail closed, regardless of exit status.
+Images with the `metadata_csum` feature are rejected before editing,
+because the overlay restores the superblock write time without recalculating checksums.
 
 The output directory is a drop-in gate input containing
 `debian-root.ext2`, `rootfs-manifest.json`, `packages.lock`, and
-`source-metadata/`. Point the existing QEMU gate variables at those files. The
-additional `dev-overlay-manifest.json` records the frozen base image and
-manifest hashes, overlay specification hash, per-file source hash and mode,
-and final derived image hash. The compatibility rootfs manifest also records
+`source-metadata/`.
+Point the existing QEMU gate variables at those files.
+The additional `dev-overlay-manifest.json` records the frozen base image and
+manifest hashes, overlay specification hash, and final derived image hash.
+Each file records its source hash, mode, and effective `create` flag.
+The compatibility rootfs manifest also records
 the derivation digest as `tool_versions.asterinas-dev-overlay`; it must never
 be confused with a newly signed package build.
 
@@ -351,6 +364,11 @@ python3 tools/riscv/debian/rootfs/firefox_startup_profile.py \
 用于验证 epoll 伪就绪；追加 `--syscall-diagnostic` 可记录常见 syscall 的
 进入/完成次数、累计 jiffies 及 clone/exec 边界。两者都只影响诊断镜像的
 bootargs，默认关闭，不改变正常启动语义。
+
+`debug-root-console` 验收是一个独立的低噪声串口 profile。QEMU 与 Megrez
+都使用恰好一个 `loglevel=off`，防止异步内核日志在字节层打断固定命令的
+nonce 协议。需要分析内核日志时应使用单独的诊断启动，不要扩大 root console
+分类器的接受范围。
 
 For the systemd M2 profile, use the M2 root and Stage1 archive. This gate keeps
 one QEMU process alive across the guest's normal reboot, interrupts the second

@@ -83,7 +83,10 @@ run_chroot() {
         # Use a plain root mapping rather than -R: the latter implicitly binds
         # host /proc, /sys and /dev, which makes paths such as staged /etc
         # cross mount boundaries under proot and breaks maintainer scripts.
-        command proot -w / -q "$(command -v qemu-riscv64-static)" -r "$stage" "$@"
+        # Keep credentials virtual too.  Without -0, APT's switch to the _apt
+        # user changes the QEMU process's host credentials, after which an
+        # unprivileged proot tracer can no longer translate pathname pointers.
+        command proot -0 -w / -q "$(command -v qemu-riscv64-static)" -r "$stage" "$@"
     else
         chroot "$stage" "$@"
     fi
@@ -410,6 +413,10 @@ cleanup() {
         # the original diagnostic or leave a stale mount in the build runner.
         while read -r mount_target; do
             [[ -n "$mount_target" ]] || continue
+            # `findmnt --target` also reports the enclosing host/container
+            # mount. Never detach anything outside this private stage tree.
+            [[ "$mount_target" == "$WORK_DIR/stage" ||
+                "$mount_target" == "$WORK_DIR/stage/"* ]] || continue
             umount -l -- "$mount_target" 2>/dev/null || true
         done < <(findmnt -R -n -o TARGET --target "$WORK_DIR/stage" 2>/dev/null | sort -r)
         chmod -R u+w -- "$WORK_DIR" 2>/dev/null || true
@@ -1595,12 +1602,21 @@ configure_desktop() {
         if [[ "$browser_mode" == online ]]; then
             install -D -m 0755 -- "$script_directory/browser_web_marionette_gate.py" \
                 "$stage/usr/lib/asterinas/browser-web-marionette-gate"
+            install -D -m 0755 -- "$script_directory/megrez_clock_sync.py" \
+                "$stage/usr/lib/asterinas/megrez-clock-sync"
             install -D -m 0644 -- "$script_directory/browser_m5_marionette_gate.py" \
                 "$stage/usr/lib/asterinas/browser_m5_marionette_gate.py"
             install -D -m 0755 -- "$script_directory/browser_web_firefox.sh" \
                 "$stage/usr/lib/asterinas/browser-web-firefox"
             install -D -m 0755 -- "$script_directory/browser_web_evidence.sh" \
                 "$stage/usr/lib/asterinas/browser-web-evidence"
+            install -D -m 0644 -- \
+                "$script_directory/physical_graphics_interaction.html" \
+                "$stage/usr/share/asterinas/physical-graphics/index.html"
+            install -D -m 0755 -- "$script_directory/physical_graphics_gate.py" \
+                "$stage/usr/lib/asterinas/physical-graphics-gate"
+            install -D -m 0755 -- "$script_directory/firefox_diagnostic_snapshot.py" \
+                "$stage/usr/lib/asterinas/firefox-diagnostic-snapshot"
             install -d -m 0700 -- "$stage/home/asterinas/browser-web-evidence"
             for evidence_name in \
                 baidu-home.json baidu-home.png \
@@ -2048,10 +2064,14 @@ browser_web_runtime_digest() {
         desktop_m5_network_gate.py
         browser_web_firefox.sh
         browser_web_marionette_gate.py
+        megrez_clock_sync.py
         browser_m5_marionette_gate.py
         browser_web_evidence.sh
         browser_web.service
         browser_web_evidence.service
+        physical_graphics_interaction.html
+        physical_graphics_gate.py
+        firefox_diagnostic_snapshot.py
     )
 
     for input in "${inputs[@]}"; do

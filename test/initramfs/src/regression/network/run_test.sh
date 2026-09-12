@@ -31,8 +31,11 @@ sleep 0.2
 ./sockoption_unix
 ./tcp_err
 ./tcp_poll
+./tcp_ppoll_wakeup
+./tcp_event_handoff
 ./tcp_reuseaddr
 ./tcp_wrapped_buffer_io
+./tcp_user_buffer_prefault
 ./ipv6_dual_stack
 ./ipv6_udp
 ./ipv6_dual_stack_udp

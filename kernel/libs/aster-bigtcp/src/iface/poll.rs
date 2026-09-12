@@ -18,7 +18,10 @@ use smoltcp::{
 use super::{
     common::IpPacket,
     poll_iface::PollableIfaceMut,
-    tcp_diagnostics::{SynAckStage, SynAckTrace, TCP_EGRESS_TRACE, TcpEgressStage},
+    tcp_diagnostics::{
+        SynAckStage, SynAckTrace, TCP_EGRESS_TRACE, TcpDiagnosticStage, TcpEgressStage,
+        record_tcp_diagnostic,
+    },
 };
 use crate::{
     ext::Ext,
@@ -648,6 +651,14 @@ impl<E: Ext> PollContext<'_, E> {
             let Some(socket) = self.iface.pop_pending_tcp() else {
                 break;
             };
+            let key = socket.connection_key();
+            record_tcp_diagnostic(
+                TcpDiagnosticStage::PendingPop,
+                key.hash(),
+                key.local_port(),
+                key.remote_port(),
+                [0, 0, 0],
+            );
 
             // We set `did_something` even if no packets are actually generated. This is because a
             // timer can expire, but no packets are actually generated.
@@ -660,6 +671,16 @@ impl<E: Ext> PollContext<'_, E> {
                     let mut this =
                         PollContext::new(iface, self.sockets, self.udp_registry, self.actions);
                     let wire_ip_repr = demap_repr(ip_repr.clone());
+
+                    if !tcp_repr.payload.is_empty() {
+                        record_tcp_diagnostic(
+                            TcpDiagnosticStage::SegmentGenerated,
+                            key.hash(),
+                            key.local_port(),
+                            key.remote_port(),
+                            [tcp_repr.payload.len() as u64, 0, 0],
+                        );
+                    }
 
                     if !this.is_unicast_local(wire_ip_repr.dst_addr()) {
                         if !tcp_repr.payload.is_empty()

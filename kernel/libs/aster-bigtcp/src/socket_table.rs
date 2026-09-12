@@ -190,6 +190,14 @@ impl ConnectionKey {
     pub(crate) const fn hash(&self) -> SocketHash {
         self.hash
     }
+
+    pub(crate) const fn local_port(&self) -> PortNum {
+        self.local_port
+    }
+
+    pub(crate) const fn remote_port(&self) -> PortNum {
+        self.remote_port
+    }
 }
 
 fn normalize_connection_addr(addr: IpAddress) -> IpAddress {
