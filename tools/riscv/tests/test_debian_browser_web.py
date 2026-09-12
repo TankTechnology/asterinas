@@ -651,6 +651,10 @@ class BrowserWebContractTests(unittest.TestCase):
         'user_pref("browser.topsites.contile.enabled", false);',
         'user_pref("network.captive-portal-service.enabled", false);',
         'user_pref("network.connectivity-service.enabled", false);',
+        'user_pref("dom.ipc.processCount", 1);',
+        'user_pref("dom.ipc.processPrelaunch.enabled", false);',
+        'user_pref("fission.autostart", false);',
+        'user_pref("media.rdd-process.enabled", false);',
     }
     _DOWNLOAD_PREFERENCES = {
         'user_pref("browser.download.folderList", 2);',
@@ -3037,6 +3041,7 @@ generate_fontconfig_cache "$stage" "$3"
     def test_gate_explicitly_disables_insecure_certs_and_records_evidence(self) -> None:
         gate = (ROOTFS / "browser_web_marionette_gate.py").read_text()
         self.assertIn('"acceptInsecureCerts": False', gate)
+        self.assertIn('"pageLoadStrategy": "eager"', gate)
         self.assertIn('capabilities.get("acceptInsecureCerts") is not False', gate)
         self.assertIn("WebDriver:TakeScreenshot", gate)
         self.assertIn("DEBIAN_BROWSER_WEB_PLATFORM_READY", gate)

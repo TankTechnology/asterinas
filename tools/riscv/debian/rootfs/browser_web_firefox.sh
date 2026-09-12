@@ -76,6 +76,13 @@ configure_network_profile() {
         # explicitly.  Sources (Debian package: Firefox ESR 140.14.0):
         # https://searchfox.org/mozilla-esr140/source/remote/shared/RecommendedPreferences.sys.mjs
         # https://searchfox.org/mozilla-esr140/source/browser/app/profile/firefox.js
+        # Keep the online gate within the guest's memory budget.  Firefox
+        # ESR otherwise prelaunches several content/RDD processes on the
+        # RISC-V guest; under TCG they can be killed while navigation is
+        # replacing the browsing context, leaving Marionette without its
+        # JSWindowActor.  One live content process still preserves the
+        # normal e10s/sandbox contract and is required by the evidence
+        # gate below.
         printf '%s\n' \
             'user_pref("browser.newtabpage.enabled", false);' \
             'user_pref("browser.pagethumbnails.capturing_disabled", true);' \
@@ -83,6 +90,10 @@ configure_network_profile() {
             'user_pref("browser.topsites.contile.enabled", false);' \
             'user_pref("network.captive-portal-service.enabled", false);' \
             'user_pref("network.connectivity-service.enabled", false);' \
+            'user_pref("dom.ipc.processCount", 1);' \
+            'user_pref("dom.ipc.processPrelaunch.enabled", false);' \
+            'user_pref("fission.autostart", false);' \
+            'user_pref("media.rdd-process.enabled", false);' \
             'user_pref("browser.download.folderList", 2);' \
             'user_pref("browser.download.dir", "/home/asterinas/Downloads");' \
             'user_pref("browser.download.useDownloadDir", true);' \
