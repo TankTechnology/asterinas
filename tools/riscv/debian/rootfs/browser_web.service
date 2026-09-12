@@ -11,6 +11,7 @@ Description=Asterinas Debian online Firefox workload
 # client under RISC-V TCG and can leave the host waiting for the global QEMU
 # timeout even though the kernel, Xorg, and Firefox are otherwise healthy.
 Wants=asterinas-desktop-m5-network.service
+Requires=asterinas-desktop-m5-network.service
 Requires=asterinas-browser-web-timeline-basic.service
 After=asterinas-browser-web-timeline-basic.service asterinas-desktop-m5-network.service
 

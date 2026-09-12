@@ -1084,7 +1084,7 @@ class BrowserWebContractTests(unittest.TestCase):
         self.assertNotIn("Environment=ASTERINAS_WEB_NETWORK_MODE=", service)
         self.assertNotIn("Environment=ASTERINAS_DESKTOP_PROXY", service)
         browser_service = (ROOTFS / "browser_web.service").read_text()
-        self.assertNotIn(
+        self.assertIn(
             "Requires=asterinas-desktop-m5-network.service", browser_service
         )
         self.assertIn(
@@ -1092,6 +1092,11 @@ class BrowserWebContractTests(unittest.TestCase):
             "asterinas-desktop-m5-network.service",
             browser_service,
         )
+        builder = (ROOTFS / "build_rootfs.sh").read_text()
+        self.assertIn(
+            "asterinas-desktop-m5-network.service.d/browser-web.conf", builder
+        )
+        self.assertIn("TimeoutStartSec=600s", builder)
 
     def test_gate_versions_accept_architecture_all_identity_packages(self) -> None:
         profile = get_profile("browser-web")

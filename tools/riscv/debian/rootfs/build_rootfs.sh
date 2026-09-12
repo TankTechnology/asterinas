@@ -1072,6 +1072,19 @@ EOF
     elif [[ "$PROFILE" == browser-web ]]; then
         configure_desktop "$stage" "m5" online
         configure_desktop_m5_network "$stage" m5 false lightweight
+        # Firefox must not compete with the 20-request fixture batch on the
+        # constrained RISC-V TCG guest.  The browser unit Requires/After-orders
+        # this service, and the lightweight browser profile gets a longer unit
+        # deadline than the generic M5 gate so all requests can finish before
+        # Firefox starts.
+        install -d -m 0755 -- \
+            "$stage/etc/systemd/system/asterinas-desktop-m5-network.service.d"
+        cat >"$stage/etc/systemd/system/asterinas-desktop-m5-network.service.d/browser-web.conf" <<'EOF'
+[Service]
+TimeoutStartSec=600s
+EOF
+        chmod 0644 -- \
+            "$stage/etc/systemd/system/asterinas-desktop-m5-network.service.d/browser-web.conf"
     fi
     : >"$stage/etc/machine-id"
     if [[ "$PROFILE" == browser-web ]]; then
