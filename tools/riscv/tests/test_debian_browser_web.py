@@ -1087,6 +1087,11 @@ class BrowserWebContractTests(unittest.TestCase):
         self.assertNotIn(
             "Requires=asterinas-desktop-m5-network.service", browser_service
         )
+        self.assertIn(
+            "After=asterinas-browser-web-timeline-basic.service "
+            "asterinas-desktop-m5-network.service",
+            browser_service,
+        )
 
     def test_gate_versions_accept_architecture_all_identity_packages(self) -> None:
         profile = get_profile("browser-web")
