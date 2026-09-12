@@ -143,8 +143,9 @@ fi
 ffplay_log="$work_directory/ffplay.stderr"
 if ! bounded env DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
     SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy SDL_RENDER_DRIVER=software \
-    ffplay -nostdin -autoexit -an -v error -x 64 -y 64 \
-        -window_title AsterinasM9Video "$video_output" 2>"$ffplay_log"; then
+    ffplay -autoexit -an -v error -x 64 -y 64 \
+        -window_title AsterinasM9Video "$video_output" \
+        </dev/null 2>"$ffplay_log"; then
     fail_with_log ffplay-failed "$ffplay_log"
 fi
 
