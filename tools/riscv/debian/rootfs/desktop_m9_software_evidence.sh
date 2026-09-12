@@ -31,6 +31,21 @@ fail() {
     exit 1
 }
 
+fail_with_log() {
+    local reason="$1"
+    local log_file="${2:-}"
+    local detail=""
+    if [[ -n "$log_file" && -s "$log_file" ]]; then
+        IFS= read -r detail <"$log_file" || true
+        detail="${detail//$'\r'/ }"
+        detail="${detail:0:180}"
+        if [[ -n "$detail" ]]; then
+            emit "DEBIAN_DESKTOP_M9_DIAG step=$reason message=$detail"
+        fi
+    fi
+    fail "$reason"
+}
+
 cleanup() {
     if [[ -n "$work_directory" && -d "$work_directory" ]]; then
         rm -rf -- "$work_directory"
@@ -58,7 +73,7 @@ bounded() {
 work_directory="$(mktemp -d "$WORK_DIRECTORY/asterinas-desktop-m9.XXXXXX")" ||
     fail work-directory
 vim_output="$VIM_OUTPUT"
-media_output="$work_directory/frame.png"
+media_output="$work_directory/frame.nut"
 media_input="$work_directory/frame.rgb"
 video_frames="$work_directory/video.rgb"
 video_output="$work_directory/video.nut"
@@ -82,45 +97,55 @@ command -v ffmpeg >/dev/null 2>&1 || fail ffmpeg-missing
 if ! bounded dd if=/dev/zero of="$media_input" bs=768 count=1 status=none; then
     fail media-input-failed
 fi
+media_ffmpeg_log="$work_directory/media-ffmpeg.stderr"
 if ! bounded ffmpeg -nostdin -v error -threads 1 -f rawvideo -pixel_format rgb24 \
-    -video_size 16x16 -i "$media_input" -frames:v 1 -y "$media_output"; then
-    fail ffmpeg-failed
+    -video_size 16x16 -framerate 1 -i "$media_input" -frames:v 1 \
+    -c:v rawvideo -pix_fmt rgb24 -f nut -y "$media_output" \
+    2>"$media_ffmpeg_log"; then
+    fail_with_log ffmpeg-failed "$media_ffmpeg_log"
 fi
 [[ -s "$media_output" && ! -L "$media_output" ]] || fail ffmpeg-output
 
 check_deadline
 command -v ffprobe >/dev/null 2>&1 || fail ffprobe-missing
-probe_output="$(bounded ffprobe -v error -select_streams v:0 \
-    -show_entries stream=width,height -of csv=p=0 "$media_output")" ||
-    fail ffprobe-failed
-[[ "$probe_output" == '16,16' ]] || fail ffprobe-mismatch
+media_ffprobe_log="$work_directory/media-ffprobe.stderr"
+probe_output="$(bounded ffprobe -v error -count_frames -select_streams v:0 \
+    -show_entries stream=codec_name,width,height,nb_read_frames \
+    -of csv=p=0 "$media_output" 2>"$media_ffprobe_log")" ||
+    fail_with_log ffprobe-failed "$media_ffprobe_log"
+[[ "$probe_output" == 'rawvideo,16,16,1' ]] || fail ffprobe-mismatch
 
 check_deadline
 command -v ffplay >/dev/null 2>&1 || fail ffplay-missing
 if ! bounded dd if=/dev/zero of="$video_frames" bs=768 count=2 status=none; then
     fail video-input-failed
 fi
+video_ffmpeg_log="$work_directory/video-ffmpeg.stderr"
 if ! bounded ffmpeg -nostdin -v error -threads 1 -f rawvideo -pixel_format rgb24 \
     -video_size 16x16 -framerate 2 -i "$video_frames" -frames:v 2 \
-    -c:v rawvideo -pix_fmt rgb24 -f nut -y "$video_output"; then
-    fail video-generate-failed
+    -c:v rawvideo -pix_fmt rgb24 -f nut -y "$video_output" \
+    2>"$video_ffmpeg_log"; then
+    fail_with_log video-generate-failed "$video_ffmpeg_log"
 fi
 [[ -s "$video_output" && ! -L "$video_output" ]] || fail video-output
+video_ffprobe_log="$work_directory/video-ffprobe.stderr"
 video_probe_output="$(bounded ffprobe -v error -count_frames -select_streams v:0 \
     -show_entries stream=codec_name,width,height,nb_read_frames \
-    -of csv=p=0 "$video_output")" ||
-    fail video-probe-failed
+    -of csv=p=0 "$video_output" 2>"$video_ffprobe_log")" ||
+    fail_with_log video-probe-failed "$video_ffprobe_log"
 [[ "$video_probe_output" == 'rawvideo,16,16,2' ]] ||
     fail video-probe-mismatch
+video_decode_log="$work_directory/video-decode.stderr"
 if ! bounded ffmpeg -nostdin -v error -threads 1 -i "$video_output" \
-    -frames:v 2 -f null -; then
-    fail video-decode-failed
+    -frames:v 2 -f null - 2>"$video_decode_log"; then
+    fail_with_log video-decode-failed "$video_decode_log"
 fi
+ffplay_log="$work_directory/ffplay.stderr"
 if ! bounded env DISPLAY=:0 XAUTHORITY=/home/asterinas/.Xauthority \
     SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy SDL_RENDER_DRIVER=software \
     ffplay -nostdin -autoexit -an -v error -x 64 -y 64 \
-        -window_title AsterinasM9Video "$video_output"; then
-    fail ffplay-failed
+        -window_title AsterinasM9Video "$video_output" 2>"$ffplay_log"; then
+    fail_with_log ffplay-failed "$ffplay_log"
 fi
 
 emit "$READY_MARKER"

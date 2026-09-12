@@ -146,6 +146,7 @@ class DebianDesktopM9SoftwareGuestTests(unittest.TestCase):
         script = EVIDENCE_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("-f rawvideo", script)
         self.assertIn("-threads 1", script)
+        self.assertIn("frame.nut", script)
         self.assertIn("ffplay -nostdin -autoexit -an", script)
         self.assertIn("SDL_VIDEODRIVER=x11", script)
         self.assertIn("${ASTERINAS_DESKTOP_M9_WORK_DIRECTORY:-/var/tmp}", script)
@@ -169,7 +170,7 @@ done
 if [ "$last" = - ]; then
     exit 0
 fi
-printf 'fake-png' >"$last"
+printf 'fake-media' >"$last"
 """,
         )
         self._install_tool(
@@ -177,7 +178,10 @@ printf 'fake-png' >"$last"
             """#!/bin/sh
 set -eu
 case "$*" in
-    *nb_read_frames*)
+    *nb_read_frames*frame.nut*)
+        printf 'rawvideo,16,16,1\\n'
+        ;;
+    *nb_read_frames*video.nut*)
         printf 'rawvideo,16,16,2\\n'
         ;;
     *)
