@@ -1460,10 +1460,10 @@ After=asterinas-desktop-m4-evidence.service asterinas-desktop-m5-network.service
 
 [Service]
 Type=oneshot
-Environment=ASTERINAS_DESKTOP_M9_TIMEOUT_SECONDS=120
-Environment=ASTERINAS_DESKTOP_M9_COMMAND_TIMEOUT_SECONDS=120
+Environment=ASTERINAS_DESKTOP_M9_TIMEOUT_SECONDS=420
+Environment=ASTERINAS_DESKTOP_M9_COMMAND_TIMEOUT_SECONDS=240
 Environment=ASTERINAS_DESKTOP_M9_WORK_DIRECTORY=/var/tmp
-TimeoutStartSec=300
+TimeoutStartSec=480
 ExecStart=/usr/lib/asterinas/desktop-m9-software-evidence
 RemainAfterExit=yes
 

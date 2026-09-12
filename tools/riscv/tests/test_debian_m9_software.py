@@ -115,8 +115,10 @@ class DebianDesktopM9SoftwareContractTests(unittest.TestCase):
         )
         self.assertIn("rm -f", builder)
         self.assertIn(
-            "ASTERINAS_DESKTOP_M9_COMMAND_TIMEOUT_SECONDS=120", builder
+            "ASTERINAS_DESKTOP_M9_COMMAND_TIMEOUT_SECONDS=240", builder
         )
+        self.assertIn("ASTERINAS_DESKTOP_M9_TIMEOUT_SECONDS=420", builder)
+        self.assertIn("TimeoutStartSec=480", builder)
         self.assertIn("ASTERINAS_DESKTOP_M9_WORK_DIRECTORY=/var/tmp", builder)
         self.assertIn("install_maintainer_script_policy", builder)
         self.assertIn("policy-rc.d", builder)
@@ -146,7 +148,7 @@ class DebianDesktopM9SoftwareGuestTests(unittest.TestCase):
         script = EVIDENCE_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("-f rawvideo", script)
         self.assertIn("-threads 1", script)
-        self.assertIn("frame.nut", script)
+        self.assertIn("video.rgb", script)
         self.assertIn("ffplay -autoexit -an", script)
         self.assertIn("</dev/null", script)
         self.assertIn("SDL_VIDEODRIVER=x11", script)
@@ -179,10 +181,7 @@ printf 'fake-media' >"$last"
             """#!/bin/sh
 set -eu
 case "$*" in
-    *nb_read_frames*frame.nut*)
-        printf 'rawvideo,16,16,1\\n'
-        ;;
-    *nb_read_frames*video.nut*)
+    *nb_read_frames*video.rgb*)
         printf 'rawvideo,16,16,2\\n'
         ;;
     *)
@@ -196,7 +195,7 @@ esac
             """#!/bin/sh
 set -eu
 case "$*" in
-    *AsterinasM9Video*video.nut*)
+    *AsterinasM9Video*video.rgb*)
         exit 0
         ;;
     *)

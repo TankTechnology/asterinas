@@ -33,11 +33,11 @@ from tools.riscv.debian.rootfs.systemd_m2_gate import orchestrate_systemd_m2_gat
 DESKTOP_M8_READY_MARKER = "DEBIAN_BROWSER_M8_READY quality=lightweight"
 DESKTOP_M9_SOFTWARE_READY_MARKER = (
     "DEBIAN_DESKTOP_M9_SOFTWARE_READY "
-    "vim=pass ffmpeg=pass ffprobe=pass media=pass"
+    "vim=pass ffmpeg=pass ffprobe=pass media=rawvideo"
 )
 DESKTOP_M9_VIDEO_PLAYER_READY_MARKER = (
     "DEBIAN_DESKTOP_M9_VIDEO_PLAYER_READY "
-    "generator=ffmpeg probe=ffprobe decode=ffmpeg player=ffplay output=x11 status=pass"
+    "fixture=rawvideo probe=ffprobe decode=ffmpeg player=ffplay output=x11 status=pass"
 )
 DESKTOP_M9_FAILURE_MARKER = b"DEBIAN_DESKTOP_M9_FAIL reason="
 
