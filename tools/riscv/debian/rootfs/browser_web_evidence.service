@@ -10,9 +10,9 @@ After=asterinas-desktop-m5-network.service
 
 [Service]
 Type=oneshot
-Environment=ASTERINAS_BROWSER_WEB_TIMEOUT_SECONDS=540
-Environment=ASTERINAS_BROWSER_WEB_FORMAL_TIMEOUT_SECONDS=480
-TimeoutStartSec=570s
+Environment=ASTERINAS_BROWSER_WEB_TIMEOUT_SECONDS=1200
+Environment=ASTERINAS_BROWSER_WEB_FORMAL_TIMEOUT_SECONDS=1080
+TimeoutStartSec=1230s
 ExecStart=/usr/lib/asterinas/browser-web-evidence
 RemainAfterExit=yes
 

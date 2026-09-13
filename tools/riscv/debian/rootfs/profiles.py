@@ -251,9 +251,13 @@ _PROFILES["browser-web"] = RootfsProfile(
     schema_version=7,
     root_label="ASTER_BROWSERWEB",
     root_uuid="c2ce5134-afcc-4d7c-b71e-7e6d4a8f2b10",
-    requested_packages=_PROFILES["browser-m5"].requested_packages + ("xdotool",),
+    # Firefox is installed without Debian Recommends.  Keep the codec stack
+    # explicit so real H.264/AAC HTML5 playback is available to the online
+    # browser instead of relying on a host-side package accident.
+    requested_packages=_PROFILES["browser-m5"].requested_packages
+    + ("ffmpeg", "xdotool"),
     identity_packages=_PROFILES["browser-m5"].identity_packages
-    + ("ca-certificates", "xdotool"),
+    + ("ca-certificates", "ffmpeg", "xdotool"),
     # Firefox's installed files consume most of a 1 GiB image.  A persistent
     # profile and even a small controlled download then hit ENOSPC during the
     # normal bookmark/places maintenance path.  Keep the smaller milestone

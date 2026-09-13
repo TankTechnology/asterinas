@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import sys
 
-from tools.riscv.debian.rootfs.desktop_m4_gate import DESKTOP_M4_MILESTONES
+from tools.riscv.debian.rootfs.desktop_m3_gate import classify_desktop
+from tools.riscv.debian.rootfs.desktop_m4_gate import DESKTOP_M4_CORE_MILESTONES
 from tools.riscv.debian.rootfs.desktop_m5_network_gate import (
     DESKTOP_M5_QEMU_MILESTONES,
-    classify_desktop_m5_qemu,
 )
 from tools.riscv.debian.rootfs.desktop_m5_qemu_gate import (
     DesktopM5QemuOperations,
@@ -33,7 +33,11 @@ from tools.riscv.debian.rootfs.systemd_m2_gate import orchestrate_systemd_m2_gat
 DESKTOP_M8_READY_MARKER = "DEBIAN_BROWSER_M8_READY quality=lightweight"
 DESKTOP_M9_SOFTWARE_READY_MARKER = (
     "DEBIAN_DESKTOP_M9_SOFTWARE_READY "
-    "vim=pass ffmpeg=pass ffprobe=pass media=pass"
+    "vim=pass ffmpeg=pass ffprobe=pass media=rawvideo"
+)
+DESKTOP_M9_VIDEO_PLAYER_READY_MARKER = (
+    "DEBIAN_DESKTOP_M9_VIDEO_PLAYER_READY "
+    "fixture=rawvideo probe=ffprobe decode=ffmpeg player=ffplay output=x11 status=pass"
 )
 DESKTOP_M9_FAILURE_MARKER = b"DEBIAN_DESKTOP_M9_FAIL reason="
 
@@ -43,22 +47,32 @@ def classify_desktop_m9_software(
 ) -> GateResult:
     """Require complete desktop/network and software evidence."""
 
-    base = classify_desktop_m5_qemu(
+    if b"debian_desktop_m4_fail reason=" in transcript.lower():
+        return GateResult(False, "desktop guest failure", None)
+    base = classify_desktop(
         transcript,
         expected_debian_release=expected_debian_release,
+        milestones=(*DESKTOP_M5_QEMU_MILESTONES, *DESKTOP_M4_CORE_MILESTONES),
+        failure_marker=b"DEBIAN_NETWORK_M5_FAIL reason=",
     )
     if not base.passed:
         return base
     if DESKTOP_M9_FAILURE_MARKER.lower() in transcript.lower():
         return GateResult(False, "software guest failure", None)
 
-    marker = DESKTOP_M9_SOFTWARE_READY_MARKER.encode()
-    if transcript.count(marker) != 1:
+    software_marker = DESKTOP_M9_SOFTWARE_READY_MARKER.encode()
+    if transcript.count(software_marker) != 1:
         return GateResult(False, "missing or duplicate software evidence", None)
-    if transcript.find(marker) < transcript.find(
+    if transcript.find(software_marker) < transcript.find(
         DESKTOP_M5_QEMU_MILESTONES[-1].encode()
     ):
         return GateResult(False, "software milestones out of order", None)
+
+    video_marker = DESKTOP_M9_VIDEO_PLAYER_READY_MARKER.encode()
+    if transcript.count(video_marker) != 1:
+        return GateResult(False, "missing or duplicate video player evidence", None)
+    if transcript.find(video_marker) < transcript.find(software_marker):
+        return GateResult(False, "video player milestones out of order", None)
     return GateResult(True, "pass", None)
 
 
@@ -70,8 +84,9 @@ class DesktopM9SoftwareOperations(DesktopM5QemuOperations):
     ARTIFACT_PREFIX = "desktop-m9-software-qemu"
     MILESTONES = (
         *DESKTOP_M5_QEMU_MILESTONES,
-        *DESKTOP_M4_MILESTONES,
+        *DESKTOP_M4_CORE_MILESTONES,
         DESKTOP_M9_SOFTWARE_READY_MARKER,
+        DESKTOP_M9_VIDEO_PLAYER_READY_MARKER,
     )
     FAILURE_MARKER = DESKTOP_M9_FAILURE_MARKER
     ADDITIONAL_FAILURE_MARKERS = (

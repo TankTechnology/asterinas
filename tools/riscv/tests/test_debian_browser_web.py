@@ -35,6 +35,8 @@ from tools.riscv.debian.rootfs.browser_web_marionette_gate import (
     _wait_for_probe,
     _wait_across_windows,
     _wait_baidu_search_outcome,
+    _playback_probe,
+    _wait_for_bilibili_playback,
     _write_evidence,
     _probe_mapping,
     probe_baidu_home,
@@ -51,6 +53,7 @@ from tools.riscv.debian.rootfs.browser_web_marionette_gate import (
     validate_baidu_challenge,
     validate_baidu_search_outcome,
     validate_bilibili_detail,
+    validate_bilibili_playback,
     validate_fixture_search,
     fixture_index_url_from_environment,
     main as marionette_gate_main,
@@ -259,6 +262,39 @@ def web_evidence() -> dict[str, bytes]:
     bilibili_home["links"] = [selected]
     bilibili_detail = snapshot(selected, tls=0)
     bilibili_detail["dom"]["bilibiliDetail"] = True
+    bilibili_detail["playback"] = {
+        "status": "pass",
+        "url": selected,
+        "source": "blob:https://www.bilibili.com/fixture-stream",
+        "sourceKind": "blob",
+        "playPromise": "resolved",
+        "readyState": 4,
+        "networkState": 2,
+        "paused": False,
+        "ended": False,
+        "duration": 12.0,
+        "bufferedEnd": 4.0,
+        "initialCurrentTime": 0.0,
+        "finalCurrentTime": 1.0,
+        "progress": 1.0,
+        "sampleCount": 3,
+        "elapsedSeconds": 2.0,
+        "events": {
+            "loadedmetadata": 1,
+            "canplay": 1,
+            "playing": 1,
+            "timeupdate": 4,
+            "waiting": 0,
+            "stalled": 0,
+            "ended": 0,
+            "error": 0,
+        },
+        "videoWidth": 1920,
+        "videoHeight": 1080,
+        "decodedFrames": 30,
+        "errorCode": None,
+        "errorMessage": None,
+    }
     trust = (
         "FIREFOX_TRUST_PASS mode=embedded-xul ca_certificates=150 "
         "firefox=installed ca_package=installed riscv_elf=1 nss_loader=1\n"
@@ -325,6 +361,7 @@ def web_evidence() -> dict[str, bytes]:
             "A_WEB_PHASE phase=tcp-connect state=start firefox_pid=100\n"
             "A_WEB_PHASE phase=tcp-connect state=done firefox_pid=100\n"
             "A_WEB_SELECTED_BV url=https://www.bilibili.com/video/BV1Ab411c7De/?track_id=\n"
+            "DEBIAN_BROWSER_WEB_BILIBILI_PLAYBACK status=pass bv=BV1Ab411c7De\n"
             "DEBIAN_BROWSER_WEB_PLATFORM_READY baidu_home=pass bilibili_home=pass "
             "bilibili_detail=pass bv=BV1Ab411c7De tls=verified\n"
         ).encode(),
@@ -614,6 +651,10 @@ class BrowserWebContractTests(unittest.TestCase):
         'user_pref("browser.topsites.contile.enabled", false);',
         'user_pref("network.captive-portal-service.enabled", false);',
         'user_pref("network.connectivity-service.enabled", false);',
+        'user_pref("dom.ipc.processCount", 1);',
+        'user_pref("dom.ipc.processPrelaunch.enabled", false);',
+        'user_pref("fission.autostart", false);',
+        'user_pref("media.rdd-process.enabled", false);',
     }
     _DOWNLOAD_PREFERENCES = {
         'user_pref("browser.download.folderList", 2);',
@@ -935,6 +976,7 @@ class BrowserWebContractTests(unittest.TestCase):
             "curl",
             "iproute2",
             "iputils-ping",
+            "ffmpeg",
             "xdotool",
         ):
             self.assertIn(package, profile.requested_packages)
@@ -1046,9 +1088,19 @@ class BrowserWebContractTests(unittest.TestCase):
         self.assertNotIn("Environment=ASTERINAS_WEB_NETWORK_MODE=", service)
         self.assertNotIn("Environment=ASTERINAS_DESKTOP_PROXY", service)
         browser_service = (ROOTFS / "browser_web.service").read_text()
-        self.assertNotIn(
+        self.assertIn(
             "Requires=asterinas-desktop-m5-network.service", browser_service
         )
+        self.assertIn(
+            "After=asterinas-browser-web-timeline-basic.service "
+            "asterinas-desktop-m5-network.service",
+            browser_service,
+        )
+        builder = (ROOTFS / "build_rootfs.sh").read_text()
+        self.assertIn(
+            "asterinas-desktop-m5-network.service.d/browser-web.conf", builder
+        )
+        self.assertIn("TimeoutStartSec=600s", builder)
 
     def test_gate_versions_accept_architecture_all_identity_packages(self) -> None:
         profile = get_profile("browser-web")
@@ -2423,9 +2475,9 @@ generate_fontconfig_cache "$stage" "$3"
         evidence = (ROOTFS / "browser_web_evidence.sh").read_text()
         service = (ROOTFS / "browser_web_evidence.service").read_text()
         diagnostic = (ROOTFS / "browser_web_diagnostic.conf").read_text()
-        self.assertIn("ASTERINAS_BROWSER_WEB_TIMEOUT_SECONDS=540", service)
-        self.assertIn("ASTERINAS_BROWSER_WEB_FORMAL_TIMEOUT_SECONDS=480", service)
-        self.assertIn("TimeoutStartSec=570s", service)
+        self.assertIn("ASTERINAS_BROWSER_WEB_TIMEOUT_SECONDS=1200", service)
+        self.assertIn("ASTERINAS_BROWSER_WEB_FORMAL_TIMEOUT_SECONDS=1080", service)
+        self.assertIn("TimeoutStartSec=1230s", service)
         self.assertIn('os.environ.get("ASTERINAS_FIREFOX_GECKO_PROFILE") == "1"', gate)
         self.assertIn('"gecko-profiler-verify"', gate)
         self.assertNotIn("SIGUSR1", gate)
@@ -2852,6 +2904,114 @@ generate_fontconfig_cache "$stage" "$3"
         with self.assertRaisesRegex(GateError, "selected live BV"):
             validate_bilibili_detail(detail, selected)
 
+    def test_bilibili_playback_requires_real_progress_and_secure_source(self) -> None:
+        evidence = json.loads(web_evidence()["bilibili-detail.json"])
+        playback = evidence["playback"]
+        validate_bilibili_playback(
+            playback, "https://www.bilibili.com/video/BV1Ab411c7De/"
+        )
+
+        stalled = copy.deepcopy(playback)
+        stalled["finalCurrentTime"] = stalled["initialCurrentTime"]
+        stalled["progress"] = 0
+        with self.assertRaisesRegex(GateError, "currentTime"):
+            validate_bilibili_playback(
+                stalled, "https://www.bilibili.com/video/BV1Ab411c7De/"
+            )
+
+        insecure = copy.deepcopy(playback)
+        insecure["source"] = "http://media.example.invalid/video.mp4"
+        insecure["sourceKind"] = "http"
+        with self.assertRaisesRegex(GateError, "secure"):
+            validate_bilibili_playback(
+                insecure, "https://www.bilibili.com/video/BV1Ab411c7De/"
+            )
+
+    def test_bilibili_playback_probe_reuses_marionette_sandbox(self) -> None:
+        playback = json.loads(web_evidence()["bilibili-detail.json"])["playback"]
+        sample = {
+            "url": playback["url"],
+            "state": "video",
+            "currentSrc": playback["source"],
+            "src": playback["source"],
+            "sourceKind": playback["sourceKind"],
+            "paused": playback["paused"],
+            "ended": playback["ended"],
+            "readyState": playback["readyState"],
+            "networkState": playback["networkState"],
+            "duration": playback["duration"],
+            "currentTime": playback["finalCurrentTime"],
+            "bufferedEnd": playback["bufferedEnd"],
+            "videoWidth": playback["videoWidth"],
+            "videoHeight": playback["videoHeight"],
+            "errorCode": playback["errorCode"],
+            "errorMessage": playback["errorMessage"],
+            "playPromise": playback["playPromise"],
+            "playError": None,
+            "events": playback["events"],
+            "lastEvent": "timeupdate",
+            "decodedFrames": playback["decodedFrames"],
+        }
+        client = mock.Mock()
+        client.command.return_value = {"value": json.dumps(sample)}
+
+        self.assertEqual(_playback_probe(client), sample)
+        _, arguments = client.command.call_args.args
+        self.assertIs(arguments["newSandbox"], False)
+        self.assertEqual(arguments["sandbox"], "default")
+
+    def test_bilibili_playback_probe_and_wait_are_bounded(self) -> None:
+        expected_url = "https://www.bilibili.com/video/BV1Ab411c7De/"
+
+        def sample(current_time: float) -> dict[str, object]:
+            return {
+                "url": expected_url,
+                "state": "video",
+                "currentSrc": "blob:https://www.bilibili.com/fixture-stream",
+                "src": "blob:https://www.bilibili.com/fixture-stream",
+                "sourceKind": "blob",
+                "paused": False,
+                "ended": False,
+                "readyState": 4,
+                "networkState": 2,
+                "duration": 12.0,
+                "currentTime": current_time,
+                "bufferedEnd": 4.0,
+                "videoWidth": 1920,
+                "videoHeight": 1080,
+                "errorCode": None,
+                "errorMessage": None,
+                "playPromise": "resolved",
+                "playError": None,
+                "events": {
+                    "loadedmetadata": 1,
+                    "canplay": 1,
+                    "playing": 1,
+                    "timeupdate": 2,
+                    "waiting": 0,
+                    "stalled": 0,
+                    "ended": 0,
+                    "error": 0,
+                },
+                "lastEvent": "timeupdate",
+                "decodedFrames": 20,
+            }
+
+        client = mock.Mock()
+        client.command.side_effect = [
+            {"value": json.dumps(sample(0.0))},
+            {"value": json.dumps(sample(0.7))},
+        ]
+        with mock.patch(
+            "tools.riscv.debian.rootfs.browser_web_marionette_gate.time.sleep"
+        ):
+            observed = _wait_for_bilibili_playback(
+                client, expected_url, time.monotonic() + 5
+            )
+        self.assertEqual(observed["status"], "pass")
+        self.assertGreaterEqual(observed["progress"], 0.5)
+        self.assertEqual(client.command.call_count, 2)
+
     def test_challenge_403_snapshot_always_fails(self) -> None:
         challenged = snapshot("https://www.baidu.com/")
         challenged["dom"]["baiduKeyword"] = True
@@ -2881,6 +3041,7 @@ generate_fontconfig_cache "$stage" "$3"
     def test_gate_explicitly_disables_insecure_certs_and_records_evidence(self) -> None:
         gate = (ROOTFS / "browser_web_marionette_gate.py").read_text()
         self.assertIn('"acceptInsecureCerts": False', gate)
+        self.assertIn('"pageLoadStrategy": "none"', gate)
         self.assertIn('capabilities.get("acceptInsecureCerts") is not False', gate)
         self.assertIn("WebDriver:TakeScreenshot", gate)
         self.assertIn("DEBIAN_BROWSER_WEB_PLATFORM_READY", gate)

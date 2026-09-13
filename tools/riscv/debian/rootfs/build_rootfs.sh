@@ -48,6 +48,7 @@ readonly -a PUBLISHED_PATHS=(
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 CACHE_DIR="$DEFAULT_CACHE_DIR"
 MIRROR="$DEFAULT_MIRROR"
+FETCH_MIRROR=""
 SUITE="$SUPPORTED_SUITE"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH-$DEFAULT_SOURCE_DATE_EPOCH}"
 WORK_DIR=""
@@ -240,6 +241,20 @@ validate_configuration() {
     if is_firefox_profile && [[ "$MIRROR" != "$DEFAULT_MIRROR" ]]; then
         die "Firefox profile base mirror must be exactly: $DEFAULT_MIRROR"
     fi
+    FETCH_MIRROR="${ASTERINAS_FETCH_MIRROR:-$MIRROR}"
+    [[ "$FETCH_MIRROR" =~ ^https://[^/?#[:space:]]+(/[^?#[:space:]]*)?/?$ ]] ||
+        die "fetch mirror must be an HTTPS URL without query or fragment"
+    FETCH_MIRROR="${FETCH_MIRROR%/}"
+    if [[ "$FETCH_MIRROR" != "$MIRROR" ]]; then
+        case "$FETCH_MIRROR" in
+            https://mirrors.ustc.edu.cn/debian | https://deb.debian.org/debian)
+                ;;
+            *)
+                die "unsupported fetch mirror override: $FETCH_MIRROR"
+                ;;
+        esac
+        log "using transport mirror $FETCH_MIRROR while retaining source identity $MIRROR"
+    fi
     [[ "$SOURCE_DATE_EPOCH" =~ ^(0|[1-9][0-9]*)$ ]] ||
         die "SOURCE_DATE_EPOCH must be a canonical nonnegative decimal integer"
     decimal_is_at_most "$SOURCE_DATE_EPOCH" "$MAX_SOURCE_DATE_EPOCH" ||
@@ -412,7 +427,7 @@ cleanup() {
 
 fetch_and_verify_release() {
     local inrelease="$WORK_DIR/source-metadata/InRelease"
-    local release_url="$MIRROR/dists/$SUITE/InRelease"
+    local release_url="$FETCH_MIRROR/dists/$SUITE/InRelease"
     local security_inrelease="$WORK_DIR/source-metadata/Security-InRelease"
     local script_directory
     local repository_root
@@ -509,7 +524,7 @@ bootstrap_rootfs() {
         "--keyring=$DEBIAN_KEYRING" \
         "$SUITE" \
         "$stage" \
-        "$MIRROR"
+        "$FETCH_MIRROR"
 
     install -m 0755 -- "$(command -v qemu-riscv64-static)" \
         "$stage/usr/bin/qemu-riscv64-static"
@@ -559,9 +574,10 @@ verify_riscv_execution_boundary() {
 install_rootfs_packages() {
     local stage="$WORK_DIR/stage"
     local bootstrap_ca="$stage/etc/ssl/certs/asterinas-bootstrap-ca.crt"
+    local policy_rc="$stage/usr/sbin/policy-rc.d"
 
     log "phase 4/8: updating signed package indexes"
-    printf 'deb %s %s main\n' "$MIRROR" "$SUITE" >"$stage/etc/apt/sources.list"
+    printf 'deb %s %s main\n' "$FETCH_MIRROR" "$SUITE" >"$stage/etc/apt/sources.list"
     if is_firefox_profile; then
         printf 'deb %s trixie-security main\n' "$SECURITY_MIRROR" \
             >>"$stage/etc/apt/sources.list"
@@ -611,13 +627,14 @@ install_rootfs_packages() {
         printf '#!/bin/sh\nexit 0\n' >"$fc_cache_wrapper"
         chmod 0755 -- "$fc_cache_wrapper"
     fi
+    install_maintainer_script_policy "$stage"
 
     log "phase 5/8: installing explicit minbase additions"
     run_chroot "$stage" /usr/bin/env \
         DEBIAN_FRONTEND=noninteractive \
         SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
         apt-get -y --no-install-recommends install "${INSTALL_PACKAGES[@]}"
-    rm -f -- "$fc_cache_wrapper"
+    rm -f -- "$fc_cache_wrapper" "$policy_rc"
     rm -f -- "$bootstrap_ca"
     run_chroot "$stage" /usr/bin/env \
         DEBIAN_FRONTEND=noninteractive \
@@ -627,6 +644,18 @@ install_rootfs_packages() {
         -exec cp -- {} "$WORK_DIR/debs/" \;
     compgen -G "$WORK_DIR/debs/*.deb" >/dev/null ||
         die "apt retained no downloaded package archives"
+}
+
+install_maintainer_script_policy() {
+    local stage="$1"
+    local policy_rc="$stage/usr/sbin/policy-rc.d"
+
+    install -d -- "${policy_rc%/*}"
+    cat >"$policy_rc" <<'EOF'
+#!/bin/sh
+exit 101
+EOF
+    chmod 0755 -- "$policy_rc"
 }
 
 audit_packages() {
@@ -651,7 +680,7 @@ audit_packages() {
         script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
         repository_root="$(cd -- "$script_directory/../../../.." && pwd -P)"
     else
-        verify_release_is_unchanged "$WORK_DIR" "$MIRROR" "$SUITE" "$DEBIAN_RELEASE"
+        verify_release_is_unchanged "$WORK_DIR" "$FETCH_MIRROR" "$SUITE" "$DEBIAN_RELEASE"
     fi
     LC_ALL=C dpkg-query \
         "--admindir=$stage/var/lib/dpkg" \
@@ -774,7 +803,7 @@ verify_m5_releases_are_unchanged() {
     repository_root="$(cd -- "$script_directory/../../../.." && pwd -P)"
     for role in base security; do
         if [[ "$role" == base ]]; then
-            mirror="$MIRROR"
+            mirror="$FETCH_MIRROR"
             suite="$SUITE"
             retained="$WORK_DIR/source-metadata/InRelease"
         else
@@ -845,6 +874,9 @@ extract_package_index_checksums() {
 admit_downloaded_packages() {
     local archive
     local archive_sha256
+    local archive_name
+    local archive_architecture
+    local archive_version
     local admitted_row
     local admitted_name
     local admitted_architecture
@@ -852,6 +884,20 @@ admit_downloaded_packages() {
 
     : >"$WORK_DIR/source-metadata/package-checksums"
     for archive in "$WORK_DIR"/debs/*.deb; do
+        archive_name="$(dpkg-deb -f "$archive" Package 2>/dev/null || true)"
+        archive_architecture="$(dpkg-deb -f "$archive" Architecture 2>/dev/null || true)"
+        archive_version="$(dpkg-deb -f "$archive" Version 2>/dev/null || true)"
+        [[ -n "$archive_name" && -n "$archive_architecture" &&
+            -n "$archive_version" ]] ||
+            die "cannot inspect downloaded package archive: ${archive##*/}"
+        if ! package_row_is_installed \
+            "$archive_name" "$archive_architecture" "$archive_version" \
+            "$WORK_DIR/packages.lock"; then
+            # A cached archive can be superseded by the version selected during
+            # this build.  It is not part of the installed package set and
+            # must not be required to resolve against the current index.
+            continue
+        fi
         archive_sha256="$(sha256sum "$archive")"
         archive_sha256="${archive_sha256%% *}"
         admitted_row="$(resolve_downloaded_package_row \
@@ -859,15 +905,6 @@ admit_downloaded_packages() {
             "$WORK_DIR/package-index-checksums")"
         IFS=$'\t' read -r admitted_name admitted_architecture \
             admitted_version _ _ <<<"$admitted_row"
-        if ! package_row_is_installed \
-            "$admitted_name" "$admitted_architecture" "$admitted_version" \
-            "$WORK_DIR/packages.lock"; then
-            # debootstrap leaves its original archives in apt's cache.  A
-            # subsequent security update can install a newer version while
-            # retaining the superseded archive.  Only the installed package
-            # set belongs in the frozen-root provenance.
-            continue
-        fi
         printf '%s\n' "$admitted_row" >> \
             "$WORK_DIR/source-metadata/package-checksums"
 
@@ -1035,6 +1072,19 @@ EOF
     elif [[ "$PROFILE" == browser-web ]]; then
         configure_desktop "$stage" "m5" online
         configure_desktop_m5_network "$stage" m5 false lightweight
+        # Firefox must not compete with the 20-request fixture batch on the
+        # constrained RISC-V TCG guest.  The browser unit Requires/After-orders
+        # this service, and the lightweight browser profile gets a longer unit
+        # deadline than the generic M5 gate so all requests can finish before
+        # Firefox starts.
+        install -d -m 0755 -- \
+            "$stage/etc/systemd/system/asterinas-desktop-m5-network.service.d"
+        cat >"$stage/etc/systemd/system/asterinas-desktop-m5-network.service.d/browser-web.conf" <<'EOF'
+[Service]
+TimeoutStartSec=600s
+EOF
+        chmod 0644 -- \
+            "$stage/etc/systemd/system/asterinas-desktop-m5-network.service.d/browser-web.conf"
     fi
     : >"$stage/etc/machine-id"
     if [[ "$PROFILE" == browser-web ]]; then
@@ -1394,27 +1444,46 @@ configure_desktop_m9_software() {
     local stage="$1"
     local script_directory
     local service_name="asterinas-desktop-m9-software"
+    local wants_directory="$stage/etc/systemd/system/graphical.target.wants"
 
     script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-    # M9 is an application smoke gate, not a second browser-quality run. Keep
-    # the M8 unit available for explicit quality profiles, but do not start it
-    # concurrently with FFmpeg on the constrained RISC-V guest.
+    # M9 is an application smoke gate, not a second browser-quality run. Do
+    # not start the NetSurf M6/M7/M8 units concurrently with FFmpeg on the
+    # constrained RISC-V guest. The M4 session/evidence pair is retained in
+    # its browser-free core mode below so the software gate has a real X11
+    # desktop without making browser liveness part of its contract.
     rm -f -- \
-        "$stage/etc/systemd/system/graphical.target.wants/asterinas-desktop-m8-browser-quality.service"
+        "$wants_directory/asterinas-desktop-m6-browser.service" \
+        "$wants_directory/asterinas-desktop-m7-baidu.service" \
+        "$wants_directory/asterinas-desktop-m8-browser-quality.service"
+    install -d -m 0755 -- \
+        "$stage/etc/systemd/system/asterinas-desktop-m4.service.d" \
+        "$stage/etc/systemd/system/asterinas-desktop-m4-evidence.service.d"
+    cat >"$stage/etc/systemd/system/asterinas-desktop-m4.service.d/m9-software.conf" <<'EOF'
+[Service]
+Environment=ASTERINAS_DESKTOP_BROWSER_ENABLED=0
+EOF
+    cat >"$stage/etc/systemd/system/asterinas-desktop-m4-evidence.service.d/m9-software.conf" <<'EOF'
+[Service]
+Environment=ASTERINAS_DESKTOP_BROWSER_ENABLED=0
+EOF
+    chmod 0644 -- \
+        "$stage/etc/systemd/system/asterinas-desktop-m4.service.d/m9-software.conf" \
+        "$stage/etc/systemd/system/asterinas-desktop-m4-evidence.service.d/m9-software.conf"
     install -D -m 0755 -- \
         "$script_directory/desktop_m9_software_evidence.sh" \
         "$stage/usr/lib/asterinas/desktop-m9-software-evidence"
     cat >"$stage/etc/systemd/system/$service_name.service" <<'EOF'
 [Unit]
 Description=Asterinas Debian M9 desktop software evidence
-After=asterinas-desktop-m7-baidu.service
+After=asterinas-desktop-m4-evidence.service asterinas-desktop-m5-network.service
 
 [Service]
 Type=oneshot
-Environment=ASTERINAS_DESKTOP_M9_TIMEOUT_SECONDS=120
-Environment=ASTERINAS_DESKTOP_M9_COMMAND_TIMEOUT_SECONDS=120
+Environment=ASTERINAS_DESKTOP_M9_TIMEOUT_SECONDS=420
+Environment=ASTERINAS_DESKTOP_M9_COMMAND_TIMEOUT_SECONDS=240
 Environment=ASTERINAS_DESKTOP_M9_WORK_DIRECTORY=/var/tmp
-TimeoutStartSec=300
+TimeoutStartSec=480
 ExecStart=/usr/lib/asterinas/desktop-m9-software-evidence
 RemainAfterExit=yes
 

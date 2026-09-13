@@ -4,6 +4,10 @@
 
 set -e
 
+# Keep this entry point usable both from the regression dispatcher (which
+# changes into the test directory) and when invoked directly by a QEMU gate.
+cd "$(dirname "$0")"
+
 ./tcp_server &
 sleep 0.2
 ./tcp_client
@@ -32,6 +36,9 @@ sleep 0.2
 ./tcp_reuseaddr
 ./tcp_wrapped_buffer_io
 ./tcp_user_buffer_prefault
+./ipv6_dual_stack
+./ipv6_udp
+./ipv6_dual_stack_udp
 ./udp_broadcast
 ./udp_err
 ./unix_datagram_err

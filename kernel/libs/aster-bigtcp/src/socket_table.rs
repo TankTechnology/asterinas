@@ -3,11 +3,17 @@
 //! This module defines the socket table, which manages all TCP and UDP sockets,
 //! for efficiently inserting, looking up, and removing sockets.
 
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::btree_map::BTreeMap,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use core::net::Ipv4Addr;
 
+use aster_softirq::BottomHalfDisabled;
 use jhash::{jhash_1vals, jhash_3vals, jhash_u32_array};
-use ostd::const_assert;
+use ostd::{const_assert, sync::SpinLock};
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint};
 
 use crate::{
@@ -17,6 +23,102 @@ use crate::{
 };
 
 pub type SocketHash = u32;
+
+/// UDP socket registry shared by all interfaces in one network environment.
+///
+/// Socket ownership and egress scheduling remain local to an interface. The
+/// registry only provides weak-reference lookup for wildcard sockets when a
+/// packet arrives through another interface.
+pub struct UdpSocketRegistry<E: Ext> {
+    state: SpinLock<UdpSocketRegistryState<E>, BottomHalfDisabled>,
+}
+
+struct UdpSocketRegistryState<E: Ext> {
+    dual_ports: Vec<PortNum>,
+    sockets: BTreeMap<PortNum, Vec<Weak<UdpSocketBg<E>>>>,
+}
+
+impl<E: Ext> UdpSocketRegistry<E> {
+    pub fn new() -> Self {
+        Self {
+            state: SpinLock::new(UdpSocketRegistryState {
+                dual_ports: Vec::new(),
+                sockets: BTreeMap::new(),
+            }),
+        }
+    }
+
+    pub(crate) fn register_socket(&self, socket: &Arc<UdpSocketBg<E>>) {
+        self.state
+            .lock()
+            .sockets
+            .entry(socket.local_port())
+            .or_default()
+            .push(Arc::downgrade(socket));
+    }
+
+    pub(crate) fn unregister_socket(&self, socket: &Arc<UdpSocketBg<E>>) {
+        let port = socket.local_port();
+        let mut state = self.state.lock();
+        let Some(entries) = state.sockets.get_mut(&port) else {
+            return;
+        };
+        entries.retain(|entry| {
+            entry
+                .upgrade()
+                .is_some_and(|existing| !Arc::ptr_eq(&existing, socket))
+        });
+        if entries.is_empty() {
+            state.sockets.remove(&port);
+        }
+    }
+
+    pub(crate) fn sockets_for_port(&self, port: PortNum) -> Vec<Arc<UdpSocketBg<E>>> {
+        let mut state = self.state.lock();
+        let mut sockets = Vec::new();
+        let mut remove_port = false;
+        if let Some(entries) = state.sockets.get_mut(&port) {
+            entries.retain(|entry| {
+                let Some(socket) = entry.upgrade() else {
+                    return false;
+                };
+                sockets.push(socket);
+                true
+            });
+            remove_port = entries.is_empty();
+        }
+        if remove_port {
+            state.sockets.remove(&port);
+        }
+        sockets
+    }
+
+    pub(crate) fn register_dual_port(&self, port: PortNum) -> bool {
+        let mut state = self.state.lock();
+        if state.dual_ports.contains(&port) {
+            return false;
+        }
+        state.dual_ports.push(port);
+        true
+    }
+
+    pub(crate) fn unregister_dual_port(&self, port: PortNum) {
+        let mut state = self.state.lock();
+        if let Some(index) = state.dual_ports.iter().position(|value| *value == port) {
+            state.dual_ports.swap_remove(index);
+        }
+    }
+
+    pub(crate) fn has_dual_port(&self, port: PortNum) -> bool {
+        self.state.lock().dual_ports.contains(&port)
+    }
+}
+
+impl<E: Ext> Default for UdpSocketRegistry<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// A unique key for identifying a `TcpListener`.
 ///
@@ -64,12 +166,17 @@ pub(crate) struct ConnectionKey {
 }
 
 impl ConnectionKey {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         local_addr: IpAddress,
         local_port: PortNum,
         remote_addr: IpAddress,
         remote_port: PortNum,
     ) -> Self {
+        // Keep IPv4 and IPv4-mapped IPv6 tuples in the same connection
+        // namespace. This lets a dual-stack listener find later IPv4 packets
+        // after the first SYN has been represented as a mapped IPv6 endpoint.
+        let local_addr = normalize_connection_addr(local_addr);
+        let remote_addr = normalize_connection_addr(remote_addr);
         let hash = hash_local_remote(local_addr, local_port, remote_addr, remote_port);
         Self {
             local_addr,
@@ -90,6 +197,13 @@ impl ConnectionKey {
 
     pub(crate) const fn remote_port(&self) -> PortNum {
         self.remote_port
+    }
+}
+
+fn normalize_connection_addr(addr: IpAddress) -> IpAddress {
+    match addr {
+        IpAddress::Ipv4(addr) => IpAddress::Ipv6(addr.to_ipv6_mapped()),
+        IpAddress::Ipv6(addr) => IpAddress::Ipv6(addr),
     }
 }
 
@@ -270,16 +384,51 @@ impl<E: Ext> SocketTable<E> {
     }
 
     pub(crate) fn lookup_listener(&self, key: &ListenerKey) -> Option<&Arc<TcpListenerBg<E>>> {
-        let bucket = {
+        let exact_bucket = {
             let hash = key.hash();
             let bucket_index = hash & LISTENER_BUCKET_MASK;
             &self.listener_buckets[bucket_index as usize]
         };
-
-        bucket
+        if let Some(listener) = exact_bucket
             .listeners
             .iter()
             .find(|listener| listener.listener_key() == key)
+        {
+            return Some(listener);
+        }
+
+        let wildcard_addr = match key.addr {
+            IpAddress::Ipv4(_) => IpAddress::Ipv4(Ipv4Addr::UNSPECIFIED),
+            IpAddress::Ipv6(_) => IpAddress::Ipv6(core::net::Ipv6Addr::UNSPECIFIED),
+        };
+        let wildcard_key = ListenerKey::new(wildcard_addr, key.port);
+        let wildcard_bucket = {
+            let hash = wildcard_key.hash();
+            let bucket_index = hash & LISTENER_BUCKET_MASK;
+            &self.listener_buckets[bucket_index as usize]
+        };
+        if let Some(listener) = wildcard_bucket
+            .listeners
+            .iter()
+            .find(|listener| listener.listener_key() == &wildcard_key)
+        {
+            return Some(listener);
+        }
+
+        if !matches!(key.addr, IpAddress::Ipv4(_)) {
+            return None;
+        }
+
+        // An IPv6 wildcard listener with IPV6_V6ONLY cleared also owns the
+        // IPv4 wildcard namespace. Keep the normal IPv4 exact/wildcard
+        // lookup priority above, then fall back to this listener.
+        let v6_wildcard =
+            ListenerKey::new(IpAddress::Ipv6(core::net::Ipv6Addr::UNSPECIFIED), key.port);
+        let bucket_index = v6_wildcard.hash() & LISTENER_BUCKET_MASK;
+        self.listener_buckets[bucket_index as usize]
+            .listeners
+            .iter()
+            .find(|listener| listener.listener_key() == &v6_wildcard && listener.accepts_ipv4())
     }
 
     pub(crate) fn lookup_connection(

@@ -2066,12 +2066,6 @@ WantedBy=multi-user.target
                         f"DEBIAN_DESKTOP_M4_DIAGNOSTIC missing={expected_diagnostic}\n",
                         evidence,
                     )
-                    if missing == "mapped-netsurf":
-                        self.assertIn(
-                            '0x200003 "Asterinas Start - NetSurf": '
-                            '("netsurf" "NetSurf")',
-                            evidence,
-                        )
                     self.assertTrue(
                         evidence.endswith(
                             "DEBIAN_DESKTOP_M4_FAIL reason=desktop-timeout\n"
@@ -2124,12 +2118,8 @@ WantedBy=multi-user.target
                     self.assertEqual(
                         xdotool_log.read_text(encoding="utf-8").splitlines(),
                         [
-                            "search --onlyvisible --classname ^netsurf-gtk$",
-                            "search --onlyvisible --classname ^xterm$",
-                            "search --onlyvisible --classname ^netsurf-gtk$",
-                            "set_desktop_for_window 42 1",
-                            "search --onlyvisible --classname ^xterm$",
-                            "set_desktop_for_window 43 1",
+                            "set_desktop_for_window 0x200003 1",
+                            "set_desktop_for_window 0x200001 1",
                         ],
                     )
                     self.assertEqual(
@@ -2138,9 +2128,14 @@ WantedBy=multi-user.target
                     )
                 else:
                     self.assertNotEqual(result.returncode, 0)
+                    expected_reason = (
+                        "overview-browser-workspace"
+                        if missing == "overview-xdotool"
+                        else "desktop-timeout"
+                    )
                     self.assertTrue(
                         console.read_text(encoding="utf-8").endswith(
-                            "DEBIAN_DESKTOP_M4_FAIL reason=desktop-timeout\n"
+                            f"DEBIAN_DESKTOP_M4_FAIL reason={expected_reason}\n"
                         )
                     )
 
@@ -2284,18 +2279,17 @@ esac
 """,
             "xwininfo": """#!/bin/sh
 printf '0x200001 "Asterinas Terminal": ("xterm" "XTerm")\n'
+[ "$ASTERINAS_DESKTOP_M4_TEST_MISSING" = mapped-netsurf ] && exit 0
 printf '0x200003 "Asterinas Start - NetSurf": ("netsurf" "NetSurf")\n'
 """,
             "xdotool": """#!/bin/sh
 [ -z "${ASTERINAS_DESKTOP_M4_XDOTOOL_LOG:-}" ] || \
   printf '%s\n' "$*" >>"$ASTERINAS_DESKTOP_M4_XDOTOOL_LOG"
 [ "$ASTERINAS_DESKTOP_M4_TEST_MISSING" != overview-xdotool ] || exit 1
-[ "$ASTERINAS_DESKTOP_M4_TEST_MISSING" != mapped-netsurf ] || \
-  [ "$*" != 'search --onlyvisible --classname ^netsurf-gtk$' ] || exit 1
 case "$*" in
-  'search --onlyvisible --classname ^netsurf-gtk$') printf '42\n' ;;
-  'search --onlyvisible --classname ^xterm$') printf '43\n' ;;
-  'search '*) exit 9 ;;
+  'set_desktop_for_window 0x200003 1') exit 0 ;;
+  'set_desktop_for_window 0x200001 1') exit 0 ;;
+  *) exit 9 ;;
 esac
 """,
         }
