@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use alloc::{
-    collections::btree_map::{BTreeMap, Entry},
+    collections::{
+        BTreeSet,
+        btree_map::{BTreeMap, Entry},
+    },
     ffi::CString,
     sync::Arc,
     vec::Vec,
@@ -409,6 +412,10 @@ impl PortState {
 
 struct PortTable {
     used_ports: BTreeMap<PortKey, PortState>,
+    // Keep the address set indexed by port/protocol.  Dual-stack conflict
+    // checks must consider wildcard addresses, but scanning every bound port
+    // makes ephemeral allocation quadratic when a browser opens many sockets.
+    port_addresses: BTreeMap<(u16, PortProtocol), BTreeSet<NormalizedAddress>>,
     next_ephemeral_port: u16,
 }
 
@@ -416,6 +423,7 @@ impl PortTable {
     fn new() -> Self {
         Self {
             used_ports: BTreeMap::new(),
+            port_addresses: BTreeMap::new(),
             next_ephemeral_port: IP_LOCAL_PORT_START,
         }
     }
@@ -441,15 +449,26 @@ impl PortTable {
             }
         };
 
-        if !config.is_backlog()
-            && self.used_ports.iter().any(|(existing, state)| {
-                existing.port == port
-                    && existing.protocol == protocol
-                    && port_addresses_conflict(existing.addr, addr)
-                    && (!config_can_reuse || !state.can_reuse())
-            })
-        {
-            return Err(BindError::InUse);
+        if !config.is_backlog() {
+            if let Some(addresses) = self.port_addresses.get(&(port, protocol)) {
+                for existing_addr in addresses {
+                    if port_addresses_conflict(*existing_addr, addr) {
+                        let key = PortKey {
+                            addr: *existing_addr,
+                            port,
+                            protocol,
+                        };
+                        if !config_can_reuse
+                            && self
+                                .used_ports
+                                .get(&key)
+                                .is_some_and(|state| !state.can_reuse())
+                        {
+                            return Err(BindError::InUse);
+                        }
+                    }
+                }
+            }
         }
 
         let key = PortKey {
@@ -479,6 +498,11 @@ impl PortTable {
                 vacant.insert(port_state);
             }
         };
+
+        self.port_addresses
+            .entry((port, protocol))
+            .or_default()
+            .insert(addr);
 
         Ok((port, config_can_reuse))
     }
@@ -511,13 +535,15 @@ impl PortTable {
         let start_port = self.next_ephemeral_port;
         let mut port = start_port;
         loop {
-            if !external_conflict(port)
-                && !self.used_ports.keys().any(|existing| {
-                    existing.port == port
-                        && existing.protocol == protocol
-                        && port_addresses_conflict(existing.addr, addr)
-                })
-            {
+            let address_conflict =
+                self.port_addresses
+                    .get(&(port, protocol))
+                    .is_some_and(|addresses| {
+                        addresses
+                            .iter()
+                            .any(|existing| port_addresses_conflict(*existing, addr))
+                    });
+            if !external_conflict(port) && !address_conflict {
                 self.next_ephemeral_port = next_ephemeral_port_after(port);
                 return Some(port);
             }
@@ -551,6 +577,12 @@ impl PortTable {
         }
         if port_state.nsocket == 0 {
             occupied.remove();
+            if let Some(addresses) = self.port_addresses.get_mut(&(port, protocol)) {
+                addresses.remove(&key.addr);
+                if addresses.is_empty() {
+                    self.port_addresses.remove(&(port, protocol));
+                }
+            }
         }
     }
 
